@@ -1,14 +1,5 @@
 Code/.venv/
 Code/bindsnet/
 
-TeX/*.synctex.gz
-TeX/*.dvi
-TeX/*.nav
-TeX/*.snm
-TeX/*.aux
-TeX/*.log
-TeX/*.out
-TeX/*.tex
-TeX/*.png
-TeX/*.jpg
-TeX/*.jpeg
+TeX/
+!TeX/*.pdf
