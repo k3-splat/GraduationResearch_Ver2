@@ -189,15 +189,15 @@ class GenerativeErrorNodes(Nodes):
         self.register_buffer("alpha_gen", torch.tensor(alpha_gen, dtype=torch.float))
 
     def forward(self, x: torch.Tensor) -> None:
-        self.s = self.alpha_gen * x
+        self.e = self.alpha_gen * x
 
     def reset_state_variables(self) -> None:
         super().reset_state_variables()
 
     def set_batch_size(self, batch_size) -> None:
         super().set_batch_size(batch_size=batch_size)
-        self.s = torch.zeros(
-            batch_size, *self.shape, device=self.s.device, dtype=torch.float
+        self.e = torch.zeros(
+            batch_size, *self.shape, device=self.e.device, dtype=torch.float
         )
 
 
@@ -216,13 +216,13 @@ class DiscriminativeErrorNodes(Nodes):
         self.register_buffer("alpha_disc", torch.tensor(alpha_disc, dtype=torch.float))
 
     def forward(self, x: torch.Tensor) -> None:
-        self.s = self.alpha_disc * x
+        self.e = self.alpha_disc * x
 
     def reset_state_variables(self) -> None:
         super().reset_state_variables()
 
     def set_batch_size(self, batch_size) -> None:
         super().set_batch_size(batch_size=batch_size)
-        self.s = torch.zeros(
-            batch_size, *self.shape, device=self.s.device, dtype=torch.float
+        self.e = torch.zeros(
+            batch_size, *self.shape, device=self.e.device, dtype=torch.float
         )

@@ -115,7 +115,6 @@ class bSpNCNNetwork(Network):
         super().add_layer(disc_error_node, name=disc_error_node_name)
 
         w_identity = torch.eye(num_value_neurons)
-        
 
         gen_tr_conn=Connection(
             source=value_node,
@@ -173,10 +172,18 @@ class bSpNCNNetwork(Network):
         former_gen_error_node_name = f'Error_gen_{former_layer_depth}'
         former_value_node = self.layers[former_value_node_name]
         former_gen_error_node = self.layers[former_gen_error_node_name]
+        former_node_num = former_value_node.n
+
+        w = clip_weight_norm_(torch.rand(num_value_neurons, former_node_num))
+        v = clip_weight_norm_(torch.rand(former_node_num, num_value_neurons))
+        E_gen = clip_weight_norm_(torch.rand(former_node_num, num_value_neurons))
+        E_disc = clip_weight_norm_(torch.rand(num_value_neurons, former_node_num))
 
         gen_pd_tr_conn=Connection(
             source=value_node,
-            target=former_gen_error_node
+            target=former_gen_error_node,
+            update_rule=None,
+            w=w
         )
         self.add_connection(
             connection=gen_pd_tr_conn,
@@ -187,7 +194,9 @@ class bSpNCNNetwork(Network):
 
         disc_pd_tr_conn=Connection(
             source=former_value_node,
-            target=disc_error_node
+            target=disc_error_node,
+            update_rule=None,
+            w=v
         )
         self.add_connection(
             connection=disc_pd_tr_conn,
@@ -198,7 +207,9 @@ class bSpNCNNetwork(Network):
 
         gen_pd_err_fd_conn=Connection(
             source=former_gen_error_node,
-            target=value_node
+            target=value_node,
+            update_rule=None,
+            w=E_gen
         )
         self.add_connection(
             connection=gen_pd_err_fd_conn,
@@ -209,7 +220,9 @@ class bSpNCNNetwork(Network):
 
         disc_pd_err_fd_conn=Connection(
             source=disc_error_node,
-            target=former_value_node
+            target=former_value_node,
+            update_rule=None,
+            w=E_disc
         )
         self.add_connection(
             connection=disc_pd_err_fd_conn,
@@ -545,7 +558,7 @@ class bSpNCNNetwork(Network):
                 source_name = f'Value_{l}'
                 target_name = f'Error_gen_{l-1}' if l > 1 else 'Error_gen_0' # 仮のターゲット名
                 # 論文では l-1 層の状態を予測する
-                conn_name = f'gen_pd_tr_{l}_{l-1}' # (仮のコネクション名)
+                conn_name = 'gen_pd_tr' # (仮のコネクション名)
                 if (source_name, target_name, conn_name) in self.connections:
                     conn = self.connections[(source_name, target_name, conn_name)]
                     predictions_gen[l-1] = conn.compute(self.layers[source_name].s)
