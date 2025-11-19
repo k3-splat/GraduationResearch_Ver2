@@ -43,7 +43,8 @@ class ValueNodes(LIFNodes):
         self.dt = torch.tensor(dt, dtype=torch.float)
 
     def forward(self, x: torch.Tensor) -> None:
-        self.e = x
+        if x is not None:
+            self.e = x
 
         # 1. 電流 j の更新 (ご指定の数式)
         self.j = self.j + (self.dt / self.tc_j) * (- self.kappa_j * self.j + self.e)
@@ -87,6 +88,9 @@ class ValueNodes(LIFNodes):
         super().set_batch_size(batch_size=batch_size)
         self.e = torch.zeros(batch_size, *self.shape, device=self.e.device)
         self.j = torch.zeros(batch_size, *self.shape, device=self.j.device)
+
+# データ層とラベル層へはトップダウン・ボトムアップ予測をそれぞれ送り，誤差フィードバックを受け取る．
+# データ層・ラベル層からはそれぞれ予測を送り，正解を与える
 
 class InputOutputNodes(LIFNodes):
     """

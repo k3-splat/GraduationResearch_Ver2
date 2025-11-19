@@ -538,6 +538,10 @@ class bSpNCNNetwork(Network):
 
         # --- メインシミュレーションループ (アルゴリズム1) ---
         for t in range(timesteps):
+            for l in range(self.layer_depth):
+                value_node = self.layers[f'Value_{l}']
+                value_node.forward(x=None)
+
             input_t = inputs.get('Input', {})[t]
             
             # <--- 変更点: 現在のタイムステップの教師データを取得 ---
