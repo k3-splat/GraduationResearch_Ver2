@@ -2,11 +2,33 @@ from typing import Dict, Iterable, Optional, Type
 
 import torch
 
-from bindsnet.network import Network
-from bindsnet.learning.reward import AbstractReward
-from bindsnet.network.nodes import CSRMNodes
-from bindsnet.network.topology import AbstractConnection
-from nodes import ValueNodes, GenerativeErrorNodes, DiscriminativeErrorNodes
+from bindsnet.bindsnet.network import Network
+from bindsnet.bindsnet.learning.reward import AbstractReward
+from bindsnet.bindsnet.network.topology import Connection, AbstractConnection
+from nodes import ValueNodes, InputOutputNodes, GenerativeErrorNodes, DiscriminativeErrorNodes
+
+def clip_weight_norm_(weights: torch.Tensor, max_norm: float = 20.0, norm_type: float = 2):
+    """
+    重み行列の列ベクトルのノルムが max_norm を超えている場合のみ、
+    max_norm になるようにスケーリングする（In-place操作）。
+
+    Args:
+        weights (torch.Tensor): 重み行列 (Pre_neurons, Post_neurons)
+        max_norm (float): 許容する最大ノルム
+        norm_type (float): ノルムの種類 (2=L2ユークリッド距離, 1=L1絶対値和)
+    """
+    # 1. 各列のノルムを計算 (dim=0 は列方向：各後シナプスニューロンへの入力重みの総和/距離)
+    current_norms = weights.norm(p=norm_type, dim=0)
+
+    # 2. 上限を超えているインデックス（列）を探す
+    mask = current_norms > max_norm
+
+    # 3. 超えている列だけスケーリング（In-placeで書き換え）
+    if mask.any():
+        # scale = target / current
+        scale_factor = max_norm / (current_norms[mask] + 1e-8) # 0除算防止
+        weights[:, mask] *= scale_factor
+
 
 class bSpNCNNetwork(Network):
     """
@@ -17,7 +39,7 @@ class bSpNCNNetwork(Network):
         dt: float = 0.25,
         batch_size: int = 1,
         learning: bool = True,
-        reward_fn: Optional[Type[AbstractReward]] = None,
+        reward_fn: Optional[Type[AbstractReward]] = None
     ) -> None:
         super().__init__(
             dt=dt,
@@ -25,9 +47,10 @@ class bSpNCNNetwork(Network):
             learning=learning,
             reward_fn=reward_fn
         )
+        self.layer_depth = 0
 
     def add_connection(
-        self, connection: AbstractConnection, source: str, target: str, name: str
+        self, connection: AbstractConnection, source: str, target: str, connection_name: str
     ) -> None:
         # language=rst
         """
@@ -37,59 +60,361 @@ class bSpNCNNetwork(Network):
         :param source: Logical name of the connection's source layer.
         :param target: Logical name of the connection's target layer.
         """
-        self.connections[(source, target, name)] = connection
-        self.add_module(name, connection)
+        self.connections[(source, target, connection_name)] = connection
+        self.add_module(connection_name, connection)
 
         connection.dt = self.dt
         connection.train(self.learning)
 
+    def add_middle_bspncn_layer(
+        self,
+        num_value_neurons: int,
+        num_error_neurons: Optional[int] = None, # 誤差ニューロンの数は価値ニューロンと同じが多い
+        **kwargs
+    ) -> None:
+        if self.layer_depth == 0:
+            print("Add the input layer first.")
+            return
+
+        """
+        SpNCNネットワークに論理的な層（ValueNodesと対応するErrorNodes）を追加する。
+
+        :param depth: この層の深度（1から始まる整数）。
+        :param num_value_neurons: ValueNodesのニューロン数。
+        :param num_error_neurons: ErrorNodesのニューロン数。指定なければnum_value_neuronsと同じ。
+        """
+        if num_error_neurons is None:
+            num_error_neurons = num_value_neurons
+
+        former_layer_depth = self.layer_depth
+        self.layer_depth += 1
+
+        # 1. ValueNodes の追加
+        value_node_name = f'Value_{self.layer_depth}'
+        value_node = ValueNodes(
+            n=num_value_neurons, 
+            dt=self.dt, # ネットワークのdtを渡す
+            **kwargs.get('value_node_params', {}) # ValueNodes固有のパラメータ
+        )
+        super().add_layer(value_node, name=value_node_name) # 親クラスのadd_layerを呼び出す
+
+        # 2. GenerativeErrorNodes (生成的予測誤差ニューロン) の追加
+        gen_error_node_name = f'Error_gen_{self.layer_depth}'
+        gen_error_node = GenerativeErrorNodes(
+            n=num_error_neurons,
+            **kwargs.get('gen_error_node_params', {})
+        )
+        super().add_layer(gen_error_node, name=gen_error_node_name)
+
+        # 3. DiscriminativeErrorNodes (識別的予測誤差ニューロン) の追加
+        disc_error_node_name = f'Error_disc_{self.layer_depth}'
+        disc_error_node = DiscriminativeErrorNodes(
+            n=num_error_neurons,
+            **kwargs.get('disc_error_node_params', {})
+        )
+        super().add_layer(disc_error_node, name=disc_error_node_name)
+
+        w_identity = torch.eye(num_value_neurons)
+        
+
+        gen_tr_conn=Connection(
+            source=value_node,
+            target=gen_error_node,
+            w=w_identity,
+            update_rule=None
+        )
+        self.add_connection(
+            connection=gen_tr_conn,
+            source=value_node_name,
+            target=gen_error_node_name,
+            connection_name="gen_tr_conn"
+        )
+
+        disc_tr_conn=Connection(
+            source=value_node,
+            target=disc_error_node,
+            w=w_identity,
+            update_rule=None
+        )
+        self.add_connection(
+            connection=disc_tr_conn,
+            source=value_node_name,
+            target=disc_error_node_name,
+            connection_name="disc_tr_conn"
+        )
+
+        gen_pd_err_conn=Connection(
+            source=gen_error_node,
+            target=value_node,
+            w=w_identity,
+            update_rule=None
+        )
+        self.add_connection(
+            connection=gen_pd_err_conn,
+            source=gen_error_node_name,
+            target=value_node_name,
+            connection_name="gen_pd_err_conn"
+        )
+
+        disc_pd_err_conn=Connection(
+            source=disc_error_node,
+            target=value_node,
+            w=w_identity,
+            update_rule=None
+        )
+        self.add_connection(
+            connection=disc_pd_err_conn,
+            source=disc_error_node_name,
+            target=value_node_name,
+            connection_name="disc_pd_err_conn"
+        )
+
+        former_value_node_name = f'Value_{former_layer_depth}'
+        former_gen_error_node_name = f'Error_gen_{former_layer_depth}'
+        former_value_node = self.layers[former_value_node_name]
+        former_gen_error_node = self.layers[former_gen_error_node_name]
+
+        gen_pd_tr_conn=Connection(
+            source=value_node,
+            target=former_gen_error_node
+        )
+        self.add_connection(
+            connection=gen_pd_tr_conn,
+            source=value_node_name,
+            target=former_gen_error_node_name,
+            connection_name="gen_pd_tr_conn"
+        )
+
+        disc_pd_tr_conn=Connection(
+            source=former_value_node,
+            target=disc_error_node
+        )
+        self.add_connection(
+            connection=disc_pd_tr_conn,
+            source=former_value_node_name,
+            target=disc_error_node_name,
+            connection_name="disc_pd_tr_conn"
+        )
+
+        gen_pd_err_fd_conn=Connection(
+            source=former_gen_error_node,
+            target=value_node
+        )
+        self.add_connection(
+            connection=gen_pd_err_fd_conn,
+            source=former_gen_error_node_name,
+            target=value_node_name,
+            connection_name="gen_pd_err_fd_conn"
+        )
+
+        disc_pd_err_fd_conn=Connection(
+            source=disc_error_node,
+            target=former_value_node
+        )
+        self.add_connection(
+            connection=disc_pd_err_fd_conn,
+            source=disc_error_node_name,
+            target=former_value_node_name,
+            connection_name="disc_pd_err_fd_conn"
+        )
+
+        print(f"Added SpNCN layer at depth {self.layer_depth}: {value_node_name}, {gen_error_node_name}, {disc_error_node_name}")
+
+    def add_input_layer(
+        self,
+        num_value_neurons: int,
+        num_error_neurons: Optional[int] = None, # 誤差ニューロンの数は価値ニューロンと同じが多い
+        **kwargs
+    ) -> None:
+        if self.layer_depth != 0:
+            print("Some layers are already existed.")
+            return
+        
+        if num_error_neurons is None:
+            num_error_neurons = num_value_neurons
+
+        # 1. ValueNodes の追加
+        input_node_name = 'Input'
+        input_node = InputOutputNodes(
+            n=num_value_neurons, 
+            dt=self.dt, # ネットワークのdtを渡す
+            **kwargs.get('value_node_params', {}) 
+        )
+        super().add_layer(input_node, name=input_node_name) # 親クラスのadd_layerを呼び出す
+
+        # 1. ValueNodes の追加
+        value_node_name = f'Value_{self.layer_depth}'
+        value_node = ValueNodes(
+            n=num_value_neurons, 
+            dt=self.dt, # ネットワークのdtを渡す
+            **kwargs.get('value_node_params', {}) # ValueNodes固有のパラメータ
+        )
+        super().add_layer(value_node, name=value_node_name) # 親クラスのadd_layerを呼び出す
+
+        # 2. GenerativeErrorNodes (生成的予測誤差ニューロン) の追加
+        gen_error_node_name = f'Error_gen_{self.layer_depth}'
+        gen_error_node = GenerativeErrorNodes(
+            n=num_error_neurons,
+            **kwargs.get('gen_error_node_params', {})
+        )
+        super().add_layer(gen_error_node, name=gen_error_node_name)
+
+        # 3. DiscriminativeErrorNodes (識別的予測誤差ニューロン) の追加
+        disc_error_node_name = f'Error_disc_{self.layer_depth}'
+        disc_error_node = DiscriminativeErrorNodes(
+            n=num_error_neurons,
+            **kwargs.get('disc_error_node_params', {})
+        )
+        super().add_layer(disc_error_node, name=disc_error_node_name)
+
+        self.layer_depth += 1
+
+        gen_tr_conn=Connection(
+            source=value_node,
+            target=gen_error_node
+        )
+        self.add_connection(
+            connection=gen_tr_conn,
+            source=value_node_name,
+            target=gen_error_node_name,
+            connection_name="gen_tr_conn"
+        )
+
+        disc_tr_conn=Connection(
+            source=value_node,
+            target=disc_error_node
+        )
+        self.add_connection(
+            connection=disc_tr_conn,
+            source=value_node_name,
+            target=disc_error_node_name,
+            connection_name="disc_tr_conn"
+        )
+
+        gen_pd_err_conn=Connection(
+            source=gen_error_node,
+            target=value_node
+        )
+        self.add_connection(
+            connection=gen_pd_err_conn,
+            source=gen_error_node_name,
+            target=value_node_name,
+            connection_name="gen_pd_err_conn"
+        )
+
+        disc_pd_err_conn=Connection(
+            source=disc_error_node,
+            target=value_node
+        )
+        self.add_connection(
+            connection=disc_pd_err_conn,
+            source=disc_error_node_name,
+            target=value_node_name,
+            connection_name="disc_pd_err_conn"
+        )
+
+        gen_tr_conn=Connection(
+            source=value_node,
+            target=input_node
+        )
+        self.add_connection(
+            connection=gen_tr_conn,
+            source=value_node_name,
+            target=input_node_name,
+            connection_name="gen_tr_conn"
+        )
+
+        gen_pd_err_fd_conn=Connection(
+            source=input_node,
+            target=value_node
+        )
+        self.add_connection(
+            connection=gen_pd_err_fd_conn,
+            source=input_node_name,
+            target=value_node_name,
+            connection_name="gen_pd_err_fd_conn"
+        )
+
+        disc_pd_tr_conn=Connection(
+            source=input_node,
+            target=disc_error_node
+        )
+        self.add_connection(
+            connection=disc_pd_tr_conn,
+            source=input_node_name,
+            target=disc_error_node_name,
+            connection_name="disc_pd_tr_conn"
+        )
     
+    def add_output_layer(
+        self,
+        num_value_neurons: int,
+        num_error_neurons: Optional[int] = None, # 誤差ニューロンの数は価値ニューロンと同じが多い
+        **kwargs
+    ) -> None:
+        if self.layer_depth == 0:
+            print("No layers are existed.")
+            return
+        
+        if num_error_neurons is None:
+            num_error_neurons = num_value_neurons
 
-    def _get_inputs(self, layers: Iterable = None) -> Dict[str, torch.Tensor]:
-        # language=rst
-        """
-        Fetches outputs from network layers to use as input to downstream layers.
+        # 1. ValueNodes の追加
+        output_node_name = 'Output'
+        output_node = InputOutputNodes(
+            n=num_value_neurons, 
+            dt=self.dt, # ネットワークのdtを渡す
+            **kwargs.get('value_node_params', {}) 
+        )
+        super().add_layer(output_node, name=output_node_name) # 親クラスのadd_layerを呼び出す
 
-        :param layers: Layers to update inputs for. Defaults to all network layers.
-        :return: Inputs to all layers for the current iteration.
-        """
-        inputs = {}
+        # 1. ValueNodes の追加
+        value_node_name = f'Value_{self.layer_depth}'
+        value_node = self.layers[value_node_name]
 
-        if layers is None:
-            layers = self.layers
+        # 2. GenerativeErrorNodes (生成的予測誤差ニューロン) の追加
+        gen_error_node_name = f'Error_gen_{self.layer_depth}'
+        gen_error_node = self.layers[gen_error_node_name]
 
-        # Loop over network connections.
-        for c in self.connections:
-            if c[1] in layers:
-                # Fetch source and target populations.
-                source = self.connections[c].source
-                target = self.connections[c].target
+        disc_pd_conn=Connection(
+            source=value_node,
+            target=output_node
+        )
+        self.add_connection(
+            connection=disc_pd_conn,
+            source=value_node_name,
+            target=output_node_name,
+            connection_name="disc_pd_conn"
+        )
 
-                if not c[1] in inputs:
-                    if isinstance(target, CSRMNodes):
-                        inputs[c[1]] = torch.zeros(
-                            self.batch_size,
-                            target.res_window_size,
-                            *target.shape,
-                            device=target.s.device,
-                        )
-                    else:
-                        inputs[c[1]] = torch.zeros(
-                            self.batch_size, *target.shape, device=target.s.device
-                        )
+        disc_tr_fd_conn=Connection(
+            source=output_node,
+            target=value_node
+        )
+        self.add_connection(
+            connection=disc_tr_fd_conn,
+            source=output_node_name,
+            target=value_node_name,
+            connection_name="disc_tr_fd_conn"
+        )
 
-                # Add to input: source's spikes multiplied by connection weights.
-                if isinstance(target, CSRMNodes):
-                    inputs[c[1]] += self.connections[c].compute_window(source.s)
-                elif c[2] == "pass_error" or "pass_prediction":
-                    inputs[c[1]] -= self.connections[c].compute(source.s)
-                else:
-                    inputs[c[1]] += self.connections[c].compute(source.s)
-
-        return inputs
+        gen_pd_tr_conn=Connection(
+            source=output_node,
+            target=gen_error_node
+        )
+        self.add_connection(
+            connection=gen_pd_tr_conn,
+            source=output_node_name,
+            target=gen_error_node_name,
+            connection_name="gen_pd_tr_conn"
+        )
 
     def run(
-        self, inputs: Dict[str, torch.Tensor], time: int, one_step=False, **kwargs
+        self, 
+        inputs: Dict[str, torch.Tensor], 
+        time: int, 
+        outputs: Optional[Dict[str, torch.Tensor]] = None, # <--- 変更点: outputs引数を追加
+        **kwargs
     ) -> None:
         # language=rst
         """
@@ -194,111 +519,118 @@ class bSpNCNNetwork(Network):
         # Effective number of timesteps.
         timesteps = int(time / self.dt)
 
-        # Run synapse updates.
-        if "a_minus" in kwargs:
-            A_Minus = kwargs["a_minus"]
-            kwargs.pop("a_minus")
-            if isinstance(A_Minus, dict):
-                A_MD = True
-            else:
-                A_MD = False
-        else:
-            A_Minus = None
+        # outputsがNoneの場合のデフォルト処理
+        if outputs is None:
+            outputs = {}
 
-        if "a_plus" in kwargs:
-            A_Plus = kwargs["a_plus"]
-            kwargs.pop("a_plus")
-            if isinstance(A_Plus, dict):
-                A_PD = True
-            else:
-                A_PD = False
-        else:
-            A_Plus = None
-
-        # Simulate network activity for `time` timesteps.
+        # --- メインシミュレーションループ (アルゴリズム1) ---
         for t in range(timesteps):
-            # Get input to all layers (synchronous mode).
-            current_inputs = {}
-            if not one_step:
-                current_inputs.update(self._get_inputs())
+            input_t = inputs.get('Input', {})[t]
+            
+            # <--- 変更点: 現在のタイムステップの教師データを取得 ---
+            output_t = outputs.get(f'Value_{self.layer_depth}', {}) # 最上位層の名前をキーとする
+            if output_t is not None and len(output_t.shape) > 0:
+                output_t = output_t[t]
+            
+            # ==========================================================
+            # 1. 予測の計算 (z_μ の計算)
+            # ==========================================================
+            # (... このセクションは前回と同じ ...)
+            predictions_gen = {} 
+            predictions_disc = {} 
 
-            for l in self.layers:
-                # Update each layer of nodes.
-                if l in inputs:
-                    if l in current_inputs:
-                        current_inputs[l] += inputs[l][t]
-                    else:
-                        current_inputs[l] = inputs[l][t]
+            # --- トップダウン予測 (Generative Prediction) ---
+            # Value_l -> Error_gen_{l-1} への接続 (gen_pd_tr_conn)
+            for l in range(self.layer_depth, 0, -1):
+                source_name = f'Value_{l}'
+                target_name = f'Error_gen_{l-1}' if l > 1 else 'Error_gen_0' # 仮のターゲット名
+                # 論文では l-1 層の状態を予測する
+                conn_name = f'gen_pd_tr_{l}_{l-1}' # (仮のコネクション名)
+                if (source_name, target_name, conn_name) in self.connections:
+                    conn = self.connections[(source_name, target_name, conn_name)]
+                    predictions_gen[l-1] = conn.compute(self.layers[source_name].s)
 
-                if one_step:
-                    # Get input to this layer (one-step mode).
-                    current_inputs.update(self._get_inputs(layers=[l]))
+            # --- ボトムアップ予測 (Discriminative Prediction) ---
+            # Value_{l-1} -> Error_disc_l への接続 (disc_pd_tr_conn)
+            for l in range(1, self.layer_depth + 1):
+                source_name = f'Value_{l-1}' if l > 1 else 'Input'
+                target_name = f'Error_disc_{l}'
+                conn_name = f'disc_pd_tr_{l-1}_{l}' # (仮のコネクション名)
+                if (source_name, target_name, conn_name) in self.connections:
+                    conn = self.connections[(source_name, target_name, conn_name)]
+                    predictions_disc[l] = conn.compute(self.layers[source_name].s)
 
-                # Inject voltage to neurons.
-                inject_v = injects_v.get(l, None)
-                if inject_v is not None:
-                    if inject_v.ndimension() == 1:
-                        self.layers[l].v += inject_v
-                    else:
-                        self.layers[l].v += inject_v[t]
+            # ==========================================================
+            # 2. 誤差の計算 (e_gen, e_disc の計算)
+            # ==========================================================
+            # (... このセクションは前回と同じ ...)
+            
+            # --- 入力層の誤差 e_gen^0 ---
+            # (... 中略 ...)
+            
+            # --- 中間層・最終層の誤差 ---
+            for l in range(1, self.layer_depth + 1):None
+                # (... 中略 ...)
 
-                if l in current_inputs:
-                    self.layers[l].forward(x=current_inputs[l])
-                else:
-                    self.layers[l].forward(
-                        x=torch.zeros(
-                            self.layers[l].s.shape, device=self.layers[l].s.device
-                        )
-                    )
+            # ==========================================================
+            # 3. ニューロン状態の更新 (j, v, s, x の更新)
+            # ==========================================================
+            
+            # --- 入力層 (InputOutputNodes) の更新 ---
+            # (... このセクションは前回と同じ ...)
+            
+            # --- 中間層 (ValueNodes) の更新 ---
+            # <--- 変更点: ループの範囲を最上位層の一つ手前までにする ---
+            for l in range(1, self.layer_depth): 
+                value_layer = self.layers[f'Value_{l}']
+                # (... 計算ロジックは前回と同じ ...)
+                total_error_input = (...)
+                value_layer.forward(total_error_input)
 
-                # Clamp neurons to spike.
-                clamp = clamps.get(l, None)
-                if clamp is not None:
-                    if clamp.ndimension() == 1:
-                        self.layers[l].s[:, clamp] = 1
-                    else:
-                        self.layers[l].s[:, clamp[t]] = 1
+            # --- 最上位層 (ValueNodes) の特別処理 (教師あり) ---
+            top_layer_name = f'Value_{self.layer_depth}'
+            top_layer = self.layers[top_layer_name]
+            
+            if output_t is not None and len(output_t.shape) > 0:
+                # --- 教師ありモード: 状態を教師データでクランプ ---
+                # one-hotベクトルのような教師データをスパイクとトレースに直接設定
+                top_layer.s = output_t.byte() # スパイクを教師データに固定
+                top_layer.x = output_t.float() # トレースも教師データに固定
+                # 電圧や電流は更新しない、あるいはリセットする（設計による）
+                top_layer.v.fill_(top_layer.reset) 
+                top_layer.j.zero_()
+            else:
+                # --- 教師なし/推論モード: 通常通り更新 ---
+                l = self.layer_depth
+                local_gen_err_term = -self.layers[f'Error_gen_{l}'].s
+                local_disc_err_term = -self.layers[f'Error_disc_{l}'].s
+                source_err_gen = self.layers[f'Error_gen_{l-1}'].s
+                conn_gen_fb = self.connections[(f'Error_gen_{l-1}', f'Value_{l}', 'gen_pd_err_fd_conn')]
+                feedback_gen_err_term = conn_gen_fb.compute(source_err_gen)
+                
+                # 最上位層なので、上位からの識別誤差フィードバックはない
+                feedback_disc_err_term = torch.zeros_like(top_layer.j)
+                
+                total_error_input = (local_gen_err_term + local_disc_err_term + 
+                                    feedback_gen_err_term + feedback_disc_err_term)
+                
+                top_layer.forward(total_error_input)
 
-                # Clamp neurons not to spike.
-                unclamp = unclamps.get(l, None)
-                if unclamp is not None:
-                    if unclamp.ndimension() == 1:
-                        self.layers[l].s[:, unclamp] = 0
-                    else:
-                        self.layers[l].s[:, unclamp[t]] = 0
+            # ==========================================================
+            # 4. シナプス重みの更新 (学習)
+            # ==========================================================
+            if self.learning:
+                # (... このセクションのロジックは前回と同じ ...)
+                # 最上位層の状態が教師データで固定されたことにより、
+                # そこから計算されるトップダウンの予測 (z_gen^{L-1}) が教師信号となり、
+                # 誤差 e_gen^{L-1} を通じて下位層の重みが正しく更新される。
+                for (source, target, name), conn in self.connections.items():None
+                    # (... 中略 ...)
 
-            for c in self.connections:
-                flad_m = False
-                if A_Minus != None and ((isinstance(A_Minus, float)) or (c in A_Minus)):
-                    if A_MD:
-                        kwargs["a_minus"] = A_Minus[c]
-                    else:
-                        kwargs["a_minus"] = A_Minus
-                    flad_m = True
-
-                flad_p = False
-                if A_Plus != None and ((isinstance(A_Plus, float)) or (c in A_Plus)):
-                    if A_PD:
-                        kwargs["a_plus"] = A_Plus[c]
-                    else:
-                        kwargs["a_plus"] = A_Plus
-                    flad_p = True
-
-                self.connections[c].update(
-                    mask=masks.get(c, None), learning=self.learning, **kwargs
-                )
-                if flad_m:
-                    kwargs.pop("a_minus")
-                if flad_p:
-                    kwargs.pop("a_plus")
-
-            # # Get input to all layers.
-            # current_inputs.update(self._get_inputs())
-
-            # Record state variables of interest.
+            # モニターの記録
             for m in self.monitors:
                 self.monitors[m].record()
 
-        # Re-normalize connections.
+        # Re-normalize connections
         for c in self.connections:
             self.connections[c].normalize()
