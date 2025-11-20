@@ -8,7 +8,7 @@ from torchvision import transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
-from bindsnet.analysis.plotting import (
+from bindsnet.bindsnet.analysis.plotting import (
     plot_assignments,
     plot_input,
     plot_performance,
@@ -16,12 +16,12 @@ from bindsnet.analysis.plotting import (
     plot_voltages,
     plot_weights,
 )
-from bindsnet.datasets import MNIST
-from bindsnet.encoding import PoissonEncoder
-from bindsnet.evaluation import all_activity, assign_labels, proportion_weighting
-from bindsnet.models import DiehlAndCook2015
-from bindsnet.network.monitors import Monitor
-from bindsnet.utils import get_square_assignments, get_square_weights
+from bindsnet.bindsnet.datasets import MNIST
+from bindsnet.bindsnet.encoding import PoissonEncoder
+from bindsnet.bindsnet.evaluation import all_activity, assign_labels, proportion_weighting
+from bindsnet.bindsnet.models import DiehlAndCook2015
+from bindsnet.bindsnet.network.monitors import Monitor
+from bindsnet.bindsnet.utils import get_square_assignments, get_square_weights
 
 # --- 引数設定 ---
 parser = argparse.ArgumentParser()
