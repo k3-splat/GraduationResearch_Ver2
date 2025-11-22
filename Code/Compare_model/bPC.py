@@ -1,202 +1,343 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-import torchvision
-import torchvision.transforms as transforms
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import numpy as np
 from tqdm import tqdm
 
-# ==================================
-# 1. モデルの定義 (bPC CNN)
-# ==================================
-class bPC_CNN(nn.Module):
-    def __init__(self, inference_steps=20, alpha_disc=0.2, alpha_gen=0.8):
-        super().__init__()
-        self.inference_steps = inference_steps
-        self.alpha_disc = alpha_disc # 識別的エネルギーの重み
-        self.alpha_gen = alpha_gen   # 生成的エネルギーの重み
-        self.activation = nn.ReLU()
+# ==========================================
+# Configuration
+# ==========================================
 
-        # ネットワーク層の定義
-        # ボトムアップ (Discriminative) パス: Conv2d
-        self.conv1_v = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
-        self.conv2_v = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.conv3_v = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
-        self.fc_v = nn.Linear(128 * 8 * 8, 10)
-
-        # トップダウン (Generative) パス: ConvTranspose2d
-        self.fc_w = nn.Linear(10, 128 * 8 * 8)
-        self.conv3_w = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.conv2_w = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.conv1_w = nn.ConvTranspose2d(32, 3, kernel_size=3, stride=1, padding=1)
-        
-        # ニューロン活動 (x) を nn.Parameter のリストとして保持
-        # これらが推論中に更新される
-        self.xs = [nn.Parameter(torch.zeros(1, 3, 32, 32)),      # x0 (input)
-                   nn.Parameter(torch.zeros(1, 32, 32, 32)),     # x1
-                   nn.Parameter(torch.zeros(1, 64, 16, 16)),     # x2
-                   nn.Parameter(torch.zeros(1, 128, 8, 8)),      # x3
-                   nn.Parameter(torch.zeros(1, 10))]             # x4 (output)
+class Config:
+    # バッチサイズ: VRAMに合わせて調整してください（論文は256ですが64で安定させます）
+    batch_size = 64  
+    epochs = 20
     
-    def initialize_activities(self, image, label):
-        """ニューロン活動を初期化する"""
-        batch_size = image.size(0)
+    # 学習率設定 (Reduction='mean' に合わせて調整)
+    lr_x = 0.05       # 推論（ニューロン活動）の更新率
+    lr_theta = 0.001  # 重みの学習率
+    
+    # 推論ステップ数 (論文 Table 7 準拠)
+    T_train = 32     
+    T_test = 100     
+    
+    # エネルギー項の重み付け
+    # reduction='mean' を使うため、極端に小さな値ではなく 0.1 程度でバランスを取ります
+    alpha_disc = 1.0 
+    alpha_gen = 0.1  
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    seed = 42
+
+# 再現性の確保
+torch.manual_seed(Config.seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(Config.seed)
+
+# ==========================================
+# Data Loading (CIFAR-10)
+# ==========================================
+
+def get_dataloaders():
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        # 画像を [-1, 1] に正規化 (Tanhの出力範囲に合わせるため)
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) 
+    ])
+
+    # 論文とは異なり、全ての学習データ(50k)とテストデータ(10k)を使用
+    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+
+    train_loader = DataLoader(train_dataset, batch_size=Config.batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=Config.batch_size, shuffle=False, num_workers=2)
+    
+    return train_loader, test_loader
+
+# ==========================================
+# VGG-bPC Model Implementation
+# ==========================================
+
+class VGG_bPC(nn.Module):
+    def __init__(self, num_classes=10):
+        super(VGG_bPC, self).__init__()
         
-        # 各層の活動の形状をバッチサイズに合わせる
-        self.xs = [
-            nn.Parameter(torch.zeros(batch_size, 3, 32, 32, device=image.device)),
-            nn.Parameter(torch.zeros(batch_size, 32, 32, 32, device=image.device)),
-            nn.Parameter(torch.zeros(batch_size, 64, 16, 16, device=image.device)),
-            nn.Parameter(torch.zeros(batch_size, 128, 8, 8, device=image.device)),
-            nn.Parameter(torch.zeros(batch_size, 10, device=image.device))
+        # Layer dimensions based on Sec 4.3 & Table 3
+        # L1 (Input): [3, 32, 32]
+        # L2: [128, 16, 16]
+        # L3: [256, 8, 8]
+        # L4: [512, 4, 4]
+        # L5: [512, 2, 2]
+        # L6 (Label): [10]
+        
+        # --- Discriminative Weights (Bottom-up: V) ---
+        self.V1 = nn.Conv2d(3, 128, kernel_size=3, padding=1)
+        self.V2 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.V3 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.V4 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.V5 = nn.Linear(512 * 2 * 2, num_classes) 
+        
+        # --- Generative Weights (Top-down: W) ---
+        self.W6 = nn.Linear(num_classes, 512 * 2 * 2)
+        self.W5 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1)
+        self.W4 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1)
+        self.W3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1)
+        self.W2 = nn.ConvTranspose2d(128, 3, kernel_size=4, stride=2, padding=1)
+
+        # Activations
+        self.relu = nn.LeakyReLU(0.1)
+        self.tanh = nn.Tanh()         # For image generation output
+        self.pool = nn.MaxPool2d(2, 2)
+        
+    def init_layers(self, x_in):
+        """
+        初期化: Bottom-up feedforward sweep
+        """
+        batch_size = x_in.shape[0]
+        
+        with torch.no_grad():
+            # L1 -> L2
+            h1 = self.pool(self.relu(self.V1(x_in)))
+            # L2 -> L3
+            h2 = self.pool(self.relu(self.V2(h1)))
+            # L3 -> L4
+            h3 = self.pool(self.relu(self.V3(h2)))
+            # L4 -> L5
+            h4 = self.pool(self.relu(self.V4(h3)))
+            # L5 -> L6
+            h4_flat = h4.view(batch_size, -1)
+            h5 = self.V5(h4_flat) 
+            
+        # 勾配計算用に requires_grad=True に設定した変数をリスト化
+        nodes = [
+            x_in.detach().clone(),                    # x1 (Image)
+            h1.detach().clone().requires_grad_(True), # x2
+            h2.detach().clone().requires_grad_(True), # x3
+            h3.detach().clone().requires_grad_(True), # x4
+            h4.detach().clone().requires_grad_(True), # x5
+            h5.detach().clone().requires_grad_(True)  # x6 (Label)
         ]
+        return nodes
+
+    def compute_energy(self, nodes):
+        """
+        Total Energy E = E_disc + E_gen
+        修正: reduction='mean' を使用して勾配爆発を防ぎ、次元差を吸収します。
+        """
+        x1, x2, x3, x4, x5, x6 = nodes
         
-        # 入力層と出力層をクランプ（固定）
-        self.xs[0].data = image
-        if label is not None:
-             self.xs[-1].data = label
-
-    def forward(self, image, label):
-        """推論と学習のメインプロセス"""
-        self.initialize_activities(image, label)
-
-        # --- 推論ループ ---
-        # ニューロン活動 x のみを最適化
-        optimizer_x = optim.SGD(self.xs[1:-1], lr=0.1, momentum=0.9) # 中間層のみ更新
-
-        for _ in range(self.inference_steps):
-            optimizer_x.zero_grad()
-            
-            # エネルギー関数を計算
-            energy = self.calculate_energy()
-            
-            # エネルギーの勾配を計算し、x を更新
-            energy.backward(retain_graph=True)
-            optimizer_x.step()
-
-        # --- 学習ステップ ---
-        # 推論後の最終的なエネルギーを計算
-        final_energy = self.calculate_energy()
-        return final_energy
-
-    def calculate_energy(self):
-        """エネルギー関数を計算"""
-        e_disc = 0
-        e_gen = 0
+        # --- Discriminative Errors (Bottom-up) ---
         
-        # 識別的エネルギー (ボトムアップ予測誤差)
-        pred_x1 = self.conv1_v(self.activation(self.xs[0]))
-        e_disc += 0.5 * ((self.xs[1] - pred_x1) ** 2).sum()
+        # x1 -> x2
+        pred_x2 = self.pool(self.relu(self.V1(x1)))
+        err_disc_2 = F.mse_loss(x2, pred_x2, reduction='mean')
         
-        pred_x2 = self.conv2_v(self.activation(self.xs[1]))
-        e_disc += 0.5 * ((self.xs[2] - pred_x2) ** 2).sum()
+        # x2 -> x3
+        pred_x3 = self.pool(self.relu(self.V2(x2)))
+        err_disc_3 = F.mse_loss(x3, pred_x3, reduction='mean')
         
-        pred_x3 = self.conv3_v(self.activation(self.xs[2]))
-        e_disc += 0.5 * ((self.xs[3] - pred_x3) ** 2).sum()
+        # x3 -> x4
+        pred_x4 = self.pool(self.relu(self.V3(x3)))
+        err_disc_4 = F.mse_loss(x4, pred_x4, reduction='mean')
         
-        x3_flat = self.xs[3].view(self.xs[3].size(0), -1)
-        pred_x4 = self.fc_v(self.activation(x3_flat))
-        e_disc += 0.5 * ((self.xs[4] - pred_x4) ** 2).sum()
-
-        # 生成的エネルギー (トップダウン予測誤差)
-        pred_x3_flat = self.fc_w(self.activation(self.xs[4]))
-        pred_x3_gen = pred_x3_flat.view_as(self.xs[3])
-        e_gen += 0.5 * ((self.xs[3] - pred_x3_gen) ** 2).sum()
-
-        pred_x2_gen = self.conv3_w(self.activation(self.xs[3]))
-        e_gen += 0.5 * ((self.xs[2] - pred_x2_gen) ** 2).sum()
+        # x4 -> x5
+        pred_x5 = self.pool(self.relu(self.V4(x4)))
+        err_disc_5 = F.mse_loss(x5, pred_x5, reduction='mean')
         
-        pred_x1_gen = self.conv2_w(self.activation(self.xs[2]))
-        e_gen += 0.5 * ((self.xs[1] - pred_x1_gen) ** 2).sum()
+        # x5 -> x6 (Identity mapping per paper requirement)
+        pred_x6 = self.V5(x5.view(x5.size(0), -1))
+        err_disc_6 = F.mse_loss(x6, pred_x6, reduction='mean')
         
-        pred_x0_gen = self.conv1_w(self.activation(self.xs[1]))
-        e_gen += 0.5 * ((self.xs[0] - pred_x0_gen) ** 2).sum()
+        E_disc = 0.5 * Config.alpha_disc * (err_disc_2 + err_disc_3 + err_disc_4 + err_disc_5 + err_disc_6)
+
+        # --- Generative Errors (Top-down) ---
         
-        total_energy = self.alpha_disc * e_disc + self.alpha_gen * e_gen
-        return total_energy
+        # x6 -> x5 (LeakyReLU)
+        pred_gen_x5 = self.W6(x6).view_as(x5)
+        err_gen_5 = F.mse_loss(x5, self.relu(pred_gen_x5), reduction='mean')
 
-    def predict(self, image):
-        """評価時の予測"""
-        # ラベルなしで活動を初期化
-        self.initialize_activities(image, label=None)
+        # x5 -> x4 (LeakyReLU)
+        pred_x4_gen = self.W5(self.relu(x5))
+        err_gen_4 = F.mse_loss(x4, self.relu(pred_x4_gen), reduction='mean')
+        
+        # x4 -> x3 (LeakyReLU)
+        pred_x3_gen = self.W4(self.relu(x4))
+        err_gen_3 = F.mse_loss(x3, self.relu(pred_x3_gen), reduction='mean')
+        
+        # x3 -> x2 (LeakyReLU)
+        pred_x2_gen = self.W3(self.relu(x3))
+        err_gen_2 = F.mse_loss(x2, self.relu(pred_x2_gen), reduction='mean')
+        
+        # x2 -> x1 (Tanh per paper requirement)
+        pred_x1_gen = self.W2(self.relu(x2))
+        err_gen_1 = F.mse_loss(x1, self.tanh(pred_x1_gen), reduction='mean')
+        
+        E_gen = 0.5 * Config.alpha_gen * (err_gen_1 + err_gen_2 + err_gen_3 + err_gen_4 + err_gen_5)
+        
+        return E_disc + E_gen, E_disc, E_gen
 
-        # 推論ループを実行して最終的な出力を得る
-        optimizer_x = optim.SGD(self.xs[1:], lr=0.1, momentum=0.9) # 全ての隠れ層と出力層を更新
+# ==========================================
+# Training & Evaluation Functions
+# ==========================================
 
-        for _ in range(self.inference_steps):
-            optimizer_x.zero_grad()
-            energy = self.calculate_energy()
-            energy.backward()
-            optimizer_x.step()
+def run_pc_inference(model, images, labels, steps, mode='train'):
+    """
+    推論フェーズ: ニューロン活動 x を更新してエネルギーを最小化
+    """
+    nodes = model.init_layers(images)
+    
+    # x6 (Label層) のクランプ処理
+    if mode == 'train':
+        with torch.no_grad():
+            one_hot = F.one_hot(labels, num_classes=10).float().to(Config.device)
+            nodes[-1].data = one_hot
+        
+        # ラベル層以外を更新対象にする
+        train_nodes = [n for i, n in enumerate(nodes) if n.requires_grad and i != 5]
+        x_optim = optim.SGD(train_nodes, lr=Config.lr_x)
+        
+    elif mode == 'test':
+        # ラベル層も含めて更新（推論）する
+        x_optim = optim.SGD([n for n in nodes if n.requires_grad], lr=Config.lr_x)
 
-        return self.xs[-1].data
+    model.eval() # BatchNorm等がないので影響小だが作法として
+    
+    losses = []
+    
+    for t in range(steps):
+        x_optim.zero_grad()
+        
+        total_energy, _, _ = model.compute_energy(nodes)
+        total_energy.backward()
+        
+        x_optim.step()
+        
+        # Train時はラベルを再度固定（念のため）
+        if mode == 'train':
+            with torch.no_grad():
+                one_hot = F.one_hot(labels, num_classes=10).float().to(Config.device)
+                nodes[-1].data = one_hot
+        
+        losses.append(total_energy.item())
+        
+    return nodes, losses
 
-# ==================================
-# 2. データセットの準備
-# ==================================
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                        download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=64,
-                                          shuffle=True, num_workers=2)
-
-testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                       download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100,
-                                         shuffle=False, num_workers=2)
-
-# ==================================
-# 3. 学習と評価
-# ==================================
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-model = bPC_CNN(inference_steps=20).to(device)
-optimizer = optim.AdamW(model.parameters(), lr=1e-4) # 重み更新用のオプティマイザ
-
-num_epochs = 10
-
-for epoch in range(num_epochs):
-    running_loss = 0.0
+def train_one_epoch(model, dataloader, optimizer_theta):
     model.train()
-    for i, data in enumerate(tqdm(trainloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
-        inputs, labels = data
-        inputs = inputs.to(device)
+    running_loss = 0.0
+    
+    pbar = tqdm(dataloader, desc="Training", leave=False)
+    
+    for images, labels in pbar:
+        images, labels = images.to(Config.device), labels.to(Config.device)
         
-        # ラベルをone-hotベクトルに変換
-        labels_onehot = nn.functional.one_hot(labels, num_classes=10).float().to(device)
-
-        optimizer.zero_grad()
-
-        # 推論と学習
-        energy = model(inputs, labels_onehot)
+        # 1. 推論フェーズ (x の更新)
+        nodes, _ = run_pc_inference(model, images, labels, Config.T_train, mode='train')
         
-        # 重みの更新
-        energy.backward()
-        optimizer.step()
+        # 2. 学習フェーズ (パラメータ θ の更新)
+        optimizer_theta.zero_grad()
+        
+        # 推論後の平衡状態でのエネルギーを再計算
+        # (ここで計算グラフを重みパラメータに接続する)
+        total_energy, _, _ = model.compute_energy(nodes)
+        
+        total_energy.backward()
+        
+        # 勾配クリッピング（安定化のため）
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        
+        optimizer_theta.step()
+        
+        running_loss += total_energy.item()
+        pbar.set_postfix({'Energy': f"{total_energy.item():.4f}"})
 
-        running_loss += energy.item()
+    return running_loss / len(dataloader)
 
-    print(f"Epoch {epoch+1}, Loss: {running_loss / len(trainloader)}")
-
-    # --- 評価 ---
+def evaluate(model, dataloader):
     model.eval()
     correct = 0
     total = 0
-    with torch.no_grad():
-        for data in tqdm(testloader, desc="Evaluating"):
-            images, labels = data
-            images, labels = images.to(device), labels.to(device)
+    
+    # パラメータ更新はしないが、推論のために勾配計算(xについて)は必要
+    # torch.no_grad()の外側、あるいは内側でenable_grad()を使う
+    
+    with torch.no_grad(): # 重み固定
+        for images, labels in tqdm(dataloader, desc="Testing", leave=False):
+            images, labels = images.to(Config.device), labels.to(Config.device)
             
-            outputs = model.predict(images)
-            _, predicted = torch.max(outputs, 1)
+            # 推論のために一時的に勾配計算を有効化
+            with torch.enable_grad():
+                nodes, _ = run_pc_inference(model, images, labels, Config.T_test, mode='test')
+            
+            # 最上位層 x6 の最大値を持つクラスを予測とする
+            pred_logits = nodes[-1]
+            predictions = torch.argmax(pred_logits, dim=1)
             
             total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            correct += (predictions == labels).sum().item()
+            
+    return 100 * correct / total
 
-    accuracy = 100 * correct / total
-    print(f'Accuracy on the test images: {accuracy:.2f} %')
+# ==========================================
+# Main
+# ==========================================
 
-print('Finished Training')
+def main():
+    print(f"=== VGG-bPC Fully Supervised Training ===")
+    print(f"Device: {Config.device}")
+    print(f"Config: batch={Config.batch_size}, lr_x={Config.lr_x}, reduction='mean'")
+    
+    print("Loading Data...")
+    train_loader, test_loader = get_dataloaders()
+    
+    print("Initializing Model...")
+    model = VGG_bPC(num_classes=10).to(Config.device)
+    
+    # 重み学習用オプティマイザ
+    optimizer_theta = optim.AdamW(model.parameters(), lr=Config.lr_theta, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_theta, T_max=Config.epochs)
+
+    print("Starting Training...")
+    
+    history = {'loss': [], 'acc': []}
+    
+    for epoch in range(Config.epochs):
+        loss = train_one_epoch(model, train_loader, optimizer_theta)
+        acc = evaluate(model, test_loader)
+        
+        scheduler.step()
+        
+        history['loss'].append(loss)
+        history['acc'].append(acc)
+        
+        print(f"Epoch {epoch+1}/{Config.epochs} | Loss: {loss:.6f} | Test Acc: {acc:.2f}%")
+        
+    # 結果のプロット
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    color = 'tab:red'
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Energy Loss (Mean)', color=color)
+    ax1.plot(history['loss'], color=color, marker='o', label='Train Energy')
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, alpha=0.3)
+
+    ax2 = ax1.twinx()  
+    color = 'tab:blue'
+    ax2.set_ylabel('Accuracy (%)', color=color)
+    ax2.plot(history['acc'], color=color, marker='s', label='Test Acc')
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    plt.title("VGG-bPC CIFAR-10 Training Curve")
+    plt.savefig("training_curve.png")
+    plt.show()
+
+    print("Training Complete.")
+
+if __name__ == "__main__":
+    main()
