@@ -23,14 +23,12 @@ from bindsnet.models import DiehlAndCook2015
 from bindsnet.network.monitors import Monitor
 from bindsnet.utils import get_square_assignments, get_square_weights
 
-# --- メイン実行ブロック ---
-# Windowsでのマルチプロセスエラーを防ぐため、関数定義以外の処理をここに入れる
 if __name__ == "__main__":
     # --- 引数設定 ---
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--n_neurons", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training")
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--n_clamp", type=int, default=1)
     parser.add_argument("--exc", type=float, default=22.5)
     parser.add_argument("--inh", type=float, default=120)
@@ -44,16 +42,16 @@ if __name__ == "__main__":
     parser.add_argument("--gpu", dest="gpu", action="store_true")
     parser.add_argument("--device_id", type=int, default=0)
 
-    # ベンチマーク用拡張引数
-    parser.add_argument("--target_accuracy", type=float, default=0.85, help="Target accuracy to stop training (0.0-1.0)")
-    parser.add_argument("--validation_interval", type=int, default=1000, help="Interval to check validation accuracy")
-    parser.add_argument("--n_val_samples", type=int, default=1000, help="Number of samples to use for fast validation")
-    parser.add_argument("--max_samples", type=int, default=300000, help="Maximum number of training samples")
+    # ベンチマーク用
+    parser.add_argument("--target_accuracy", type=float, default=0.85)
+    parser.add_argument("--validation_interval", type=int, default=1000)
+    parser.add_argument("--n_val_samples", type=int, default=1000)
+    parser.add_argument("--max_samples", type=int, default=300000)
 
     parser.set_defaults(plot=False, gpu=True)
-
     args = parser.parse_args()
 
+    # 変数展開
     seed = args.seed
     n_neurons = args.n_neurons
     batch_size = args.batch_size
@@ -92,7 +90,7 @@ if __name__ == "__main__":
     n_sqrt = int(np.ceil(np.sqrt(n_neurons)))
     per_class = int(n_neurons / n_classes)
 
-    # --- ネットワーク構築 (Diehl & Cook 2015) ---
+    # --- ネットワーク構築 ---
     n_inpt = 3072 
     inpt_shape = (3, 32, 32)
 
@@ -116,12 +114,13 @@ if __name__ == "__main__":
     network.add_monitor(exc_voltage_monitor, name="exc_voltage")
     network.add_monitor(inh_voltage_monitor, name="inh_voltage")
 
+    # 【修正1】Monitorに device=device を追加
     spikes = {}
     for layer in set(network.layers):
-        spikes[layer] = Monitor(network.layers[layer], state_vars=["s"], time=sim_time)
+        spikes[layer] = Monitor(network.layers[layer], state_vars=["s"], time=sim_time, device=device)
         network.add_monitor(spikes[layer], name="%s_spikes" % layer)
 
-    # --- データセットの準備 (CIFAR-10) ---
+    # --- データセット準備 ---
     data_path = os.path.join("..", "..", "data", "CIFAR10")
 
     full_train_dataset = CIFAR10(
@@ -154,7 +153,6 @@ if __name__ == "__main__":
         ),
     )
 
-    # 【重要修正】Windowsでは num_workers=0 に設定する必要があります
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=gpu)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=gpu)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=gpu)
@@ -167,21 +165,9 @@ if __name__ == "__main__":
     accuracy = {"all": [], "proportion": []}
     labels = torch.empty(update_interval, device=device)
 
-    # コスト計測用変数
     total_spikes = 0 
 
-    # プロット用
-    inpt_axes = None
-    inpt_ims = None
-    spike_axes = None
-    spike_ims = None
-    weights_im = None
-    assigns_im = None
-    perf_ax = None
-    voltage_axes = None
-    voltage_ims = None
-
-    # --- ヘルパー関数: 評価実行用 ---
+    # --- 評価関数 ---
     def run_evaluation(network, loader, n_samples_to_test, description="Evaluation"):
         network.train(mode=False)
         total_correct = 0
@@ -196,12 +182,16 @@ if __name__ == "__main__":
             label = batch["label"]
             current_batch_size = image.size(0)
             
+            # network.run は評価時ならバッチ実行可能（クランプなしならエラー起きないため）
+            # ただし入力形状は (Time, Batch, C, H, W) にする
             inputs = {"X": image.permute(1, 0, 2, 3, 4).to(device)}
-                
             network.run(inputs=inputs, time=sim_time)
             
             s = spikes["Ae"].get("s") # (Time, Batch, Neurons)
-            s_batch = s.permute(1, 0, 2) # (Batch, Time, Neurons)
+            
+            # 【修正2】時間次元を合計して (Batch, Neurons) にする
+            s_batch = s.sum(0) 
+            
             label_tensor = label.to(device)
             
             all_activity_pred = all_activity(
@@ -282,10 +272,7 @@ if __name__ == "__main__":
 
             if goal_reached: break
 
-            # --- 入力準備 ---
-            inputs = {"X": image.permute(1, 0, 2, 3, 4).to(device)}
-
-            # --- 教師信号（クランプ） ---
+            # --- 教師信号（クランプマスク） ---
             clamp_mask = torch.zeros(current_batch_size, n_neurons, dtype=torch.bool, device=device)
             for b in range(current_batch_size):
                 target_label = label[b].item()
@@ -293,10 +280,47 @@ if __name__ == "__main__":
                 choice = np.random.choice(per_class, size=n_clamp, replace=False)
                 clamp_idx = start_idx + choice
                 clamp_mask[b, clamp_idx] = True
-            clamp = {"Ae": clamp_mask}
 
-            # --- 実行 ---
-            network.run(inputs=inputs, time=sim_time, clamp=clamp)
+            # --- 手動学習ループ ---
+            input_spikes = image.permute(1, 0, 2, 3, 4).to(device)
+
+            if network.batch_size != current_batch_size:
+                network.batch_size = current_batch_size
+                for l in network.layers:
+                    network.layers[l].set_batch_size(current_batch_size)
+                for m in network.monitors:
+                    network.monitors[m].reset_state_variables()
+
+            timesteps = int(sim_time / dt)
+            network.train(True)
+
+            for t in range(timesteps):
+                current_inputs = network._get_inputs()
+                inp_t = input_spikes[t]
+                if "X" in current_inputs:
+                    current_inputs["X"] += inp_t
+                else:
+                    current_inputs["X"] = inp_t
+
+                for l in network.layers:
+                    if l in current_inputs:
+                        network.layers[l].forward(x=current_inputs[l])
+                    else:
+                        network.layers[l].forward(
+                            x=torch.zeros(network.layers[l].s.shape, device=device)
+                        )
+
+                    if l == "Ae":
+                        network.layers[l].s.masked_fill_(clamp_mask, 1.0)
+
+                for c in network.connections:
+                    network.connections[c].update(mask=None, learning=True)
+
+                for m in network.monitors:
+                    network.monitors[m].record()
+
+            for c in network.connections:
+                network.connections[c].normalize()
 
             # --- スパイクカウント ---
             batch_spike_count = 0
@@ -312,33 +336,7 @@ if __name__ == "__main__":
                 spike_record[idx] = s_ae[b]
                 labels[idx] = label[b]
 
-            # --- プロット (簡易) ---
-            if plot:
-                input_exc_conn = network.connections[("X", "Ae")]
-                if hasattr(input_exc_conn, "w"):
-                    w = input_exc_conn.w
-                else:
-                    w = input_exc_conn.params["weight"]
-
-                inpt_view = inputs["X"][:, 0, :, :, :].sum(0).sum(0)
-                exc_voltages = exc_voltage_monitor.get("v")[:, 0, :]
-                inh_voltages = inh_voltage_monitor.get("v")[:, 0, :]
-                s_plot = {layer: spikes[layer].get("s")[:, 0, :].unsqueeze(1) for layer in spikes}
-                w_reshaped = w.view(3072, n_neurons)
-
-                try:
-                    inpt_axes, inpt_ims = plot_input(
-                        image[0].sum(0), inpt_view, label=label[0], axes=inpt_axes, ims=inpt_ims
-                    )
-                    spike_ims, spike_axes = plot_spikes(
-                        s_plot, ims=spike_ims, axes=spike_axes
-                    )
-                    voltage_ims, voltage_axes = plot_voltages(
-                        {"Ae": exc_voltages, "Ai": inh_voltages}, ims=voltage_ims, axes=voltage_axes
-                    )
-                    plt.pause(1e-8)
-                except Exception as e:
-                    print(f"Plot error (ignoring): {e}")
+            # プロットは省略
 
             network.reset_state_variables()
             total_samples_processed += current_batch_size
