@@ -1,343 +1,319 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import numpy as np
-from tqdm import tqdm
+from torch.utils.data import DataLoader, random_split
+import time
 
-# ==========================================
-# Configuration
-# ==========================================
+# ---------------------------------------------------------
+# 1. 設定とハイパーパラメータ (論文 Table 8 準拠)
+# ---------------------------------------------------------
+CONFIG = {
+    'batch_size': 128,      # ユーザー指定 (論文は256)
+    'lr_weights': 1e-4,     # 論文 Table 8: lr_theta = 1e-4
+    'lr_activities': 0.01,  # 論文 Table 8: lr_x = 0.01
+    'weight_decay': 5e-3,   # 論文 Table 8: weight_decay = 5e-3
+    'target_accuracy': 97.0,
+    'max_epochs': 50,
+    'hidden_size': 500,     # ユーザー指定 (論文は256)
+    'val_interval': 100,
+    'alpha_gen': 1e-4,      # 論文 Table 8: alpha_gen = 1e-4
+    'alpha_disc': 1.0,      # 論文 Table 8: alpha_disc = 1
+    'T_train': 8,           # 論文 Table 8: T = 8
+    'T_test': 100,          # 論文 Table 8: T eval = 100
+    'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+}
 
-class Config:
-    # バッチサイズ: VRAMに合わせて調整してください（論文は256ですが64で安定させます）
-    batch_size = 64  
-    epochs = 20
-    
-    # 学習率設定 (Reduction='mean' に合わせて調整)
-    lr_x = 0.05       # 推論（ニューロン活動）の更新率
-    lr_theta = 0.001  # 重みの学習率
-    
-    # 推論ステップ数 (論文 Table 7 準拠)
-    T_train = 32     
-    T_test = 100     
-    
-    # エネルギー項の重み付け
-    # reduction='mean' を使うため、極端に小さな値ではなく 0.1 程度でバランスを取ります
-    alpha_disc = 1.0 
-    alpha_gen = 0.1  
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    seed = 42
-
-# 再現性の確保
-torch.manual_seed(Config.seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(Config.seed)
-
-# ==========================================
-# Data Loading (CIFAR-10)
-# ==========================================
-
-def get_dataloaders():
+# ---------------------------------------------------------
+# 2. データセットの準備
+# ---------------------------------------------------------
+def get_dataloaders(batch_size):
     transform = transforms.Compose([
         transforms.ToTensor(),
-        # 画像を [-1, 1] に正規化 (Tanhの出力範囲に合わせるため)
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) 
+        transforms.Normalize((0.1307,), (0.3081,)),
+        transforms.Lambda(lambda x: torch.flatten(x))
     ])
-
-    # 論文とは異なり、全ての学習データ(50k)とテストデータ(10k)を使用
-    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-
-    train_loader = DataLoader(train_dataset, batch_size=Config.batch_size, shuffle=True, num_workers=2)
-    test_loader = DataLoader(test_dataset, batch_size=Config.batch_size, shuffle=False, num_workers=2)
     
-    return train_loader, test_loader
+    full_train = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    train_size = 50000
+    val_size = 10000
+    train_dataset, val_dataset = random_split(full_train, [train_size, val_size])
+    test_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
 
-# ==========================================
-# VGG-bPC Model Implementation
-# ==========================================
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    return train_loader, val_loader, test_loader
 
-class VGG_bPC(nn.Module):
-    def __init__(self, num_classes=10):
-        super(VGG_bPC, self).__init__()
+# ---------------------------------------------------------
+# 3. モデル定義: bPC (Structure: 784 -> 500 -> 500 -> 500 -> 10)
+# ---------------------------------------------------------
+class bPC_Layer(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        # 論文 Table 8: Activation = Leaky ReLU
+        self.activation = nn.LeakyReLU(0.1)
         
-        # Layer dimensions based on Sec 4.3 & Table 3
-        # L1 (Input): [3, 32, 32]
-        # L2: [128, 16, 16]
-        # L3: [256, 8, 8]
-        # L4: [512, 4, 4]
-        # L5: [512, 2, 2]
-        # L6 (Label): [10]
+        # Bottom-up weights (Discriminative): V
+        self.V = nn.Linear(in_features, out_features, bias=False)
+        # Top-down weights (Generative): W
+        self.W = nn.Linear(out_features, in_features, bias=False)
         
-        # --- Discriminative Weights (Bottom-up: V) ---
-        self.V1 = nn.Conv2d(3, 128, kernel_size=3, padding=1)
-        self.V2 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.V3 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.V4 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.V5 = nn.Linear(512 * 2 * 2, num_classes) 
-        
-        # --- Generative Weights (Top-down: W) ---
-        self.W6 = nn.Linear(num_classes, 512 * 2 * 2)
-        self.W5 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1)
-        self.W4 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1)
-        self.W3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1)
-        self.W2 = nn.ConvTranspose2d(128, 3, kernel_size=4, stride=2, padding=1)
+    def forward_bottom_up(self, u_lower):
+        return self.activation(self.V(u_lower))
 
-        # Activations
-        self.relu = nn.LeakyReLU(0.1)
-        self.tanh = nn.Tanh()         # For image generation output
-        self.pool = nn.MaxPool2d(2, 2)
-        
-    def init_layers(self, x_in):
+class bPC_Net(nn.Module):
+    def __init__(self, hidden_size=500):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            bPC_Layer(784, hidden_size),
+            bPC_Layer(hidden_size, hidden_size),
+            bPC_Layer(hidden_size, hidden_size),
+            bPC_Layer(hidden_size, 10)
+        ])
+        # Leaky ReLU derivative for manual update
+        self.act_deriv = lambda x: (x > 0).float() + 0.1 * (x <= 0).float()
+
+    def forward_init(self, x_in):
+        """ボトムアップ・スイープによる初期化"""
+        activities = [x_in]
+        curr = x_in
+        for layer in self.layers:
+            curr = layer.forward_bottom_up(curr)
+            activities.append(curr)
+        return activities
+
+    def run_inference(self, activities, x_in, y_target, steps, lr_x, is_training=True):
         """
-        初期化: Bottom-up feedforward sweep
+        反復推論 (Neural Dynamics)
+        Eq 5: dx/dt = -err_gen - err_disc + f'(x) * (errors_from_neighbors)
         """
-        batch_size = x_in.shape[0]
+        x = [a.clone().detach() for a in activities]
         
-        with torch.no_grad():
-            # L1 -> L2
-            h1 = self.pool(self.relu(self.V1(x_in)))
-            # L2 -> L3
-            h2 = self.pool(self.relu(self.V2(h1)))
-            # L3 -> L4
-            h3 = self.pool(self.relu(self.V3(h2)))
-            # L4 -> L5
-            h4 = self.pool(self.relu(self.V4(h3)))
-            # L5 -> L6
-            h4_flat = h4.view(batch_size, -1)
-            h5 = self.V5(h4_flat) 
+        # Training時は最上位層をラベルに固定
+        if y_target is not None and is_training:
+            batch_size = x_in.size(0)
+            y_onehot = torch.zeros(batch_size, 10, device=x_in.device)
+            y_onehot.scatter_(1, y_target.view(-1, 1), 1.0)
+            x[-1] = y_onehot
+
+        for _ in range(steps):
+            eps_gen = [] 
+            eps_disc = []
             
-        # 勾配計算用に requires_grad=True に設定した変数をリスト化
-        nodes = [
-            x_in.detach().clone(),                    # x1 (Image)
-            h1.detach().clone().requires_grad_(True), # x2
-            h2.detach().clone().requires_grad_(True), # x3
-            h3.detach().clone().requires_grad_(True), # x4
-            h4.detach().clone().requires_grad_(True), # x5
-            h5.detach().clone().requires_grad_(True)  # x6 (Label)
-        ]
-        return nodes
+            # --- 1. Error Computation ---
+            for l in range(len(self.layers) + 1):
+                # Discriminative Error: x_l - f(V * x_{l-1})
+                if l == 0:
+                    e_d = torch.zeros_like(x[l])
+                else:
+                    layer = self.layers[l-1]
+                    pred = layer.activation(layer.V(x[l-1]))
+                    e_d = CONFIG['alpha_disc'] * (x[l] - pred)
+                eps_disc.append(e_d)
 
-    def compute_energy(self, nodes):
-        """
-        Total Energy E = E_disc + E_gen
-        修正: reduction='mean' を使用して勾配爆発を防ぎ、次元差を吸収します。
-        """
-        x1, x2, x3, x4, x5, x6 = nodes
-        
-        # --- Discriminative Errors (Bottom-up) ---
-        
-        # x1 -> x2
-        pred_x2 = self.pool(self.relu(self.V1(x1)))
-        err_disc_2 = F.mse_loss(x2, pred_x2, reduction='mean')
-        
-        # x2 -> x3
-        pred_x3 = self.pool(self.relu(self.V2(x2)))
-        err_disc_3 = F.mse_loss(x3, pred_x3, reduction='mean')
-        
-        # x3 -> x4
-        pred_x4 = self.pool(self.relu(self.V3(x3)))
-        err_disc_4 = F.mse_loss(x4, pred_x4, reduction='mean')
-        
-        # x4 -> x5
-        pred_x5 = self.pool(self.relu(self.V4(x4)))
-        err_disc_5 = F.mse_loss(x5, pred_x5, reduction='mean')
-        
-        # x5 -> x6 (Identity mapping per paper requirement)
-        pred_x6 = self.V5(x5.view(x5.size(0), -1))
-        err_disc_6 = F.mse_loss(x6, pred_x6, reduction='mean')
-        
-        E_disc = 0.5 * Config.alpha_disc * (err_disc_2 + err_disc_3 + err_disc_4 + err_disc_5 + err_disc_6)
+                # Generative Error: x_l - W * f(x_{l+1})
+                # Note: 論文 Eq 4 & 5 に従い、top-down予測は W * f(x_{l+1})
+                if l == len(self.layers):
+                    e_g = torch.zeros_like(x[l])
+                else:
+                    layer = self.layers[l]
+                    pred = layer.W(layer.activation(x[l+1]))
+                    e_g = CONFIG['alpha_gen'] * (x[l] - pred)
+                eps_gen.append(e_g)
 
-        # --- Generative Errors (Top-down) ---
-        
-        # x6 -> x5 (LeakyReLU)
-        pred_gen_x5 = self.W6(x6).view_as(x5)
-        err_gen_5 = F.mse_loss(x5, self.relu(pred_gen_x5), reduction='mean')
+            # --- 2. Activity Update ---
+            start_idx = 1
+            end_idx = len(self.layers)
+            if is_training and y_target is not None:
+                end_idx = len(self.layers) - 1 # Label層は更新しない
 
-        # x5 -> x4 (LeakyReLU)
-        pred_x4_gen = self.W5(self.relu(x5))
-        err_gen_4 = F.mse_loss(x4, self.relu(pred_x4_gen), reduction='mean')
-        
-        # x4 -> x3 (LeakyReLU)
-        pred_x3_gen = self.W4(self.relu(x4))
-        err_gen_3 = F.mse_loss(x3, self.relu(pred_x3_gen), reduction='mean')
-        
-        # x3 -> x2 (LeakyReLU)
-        pred_x2_gen = self.W3(self.relu(x3))
-        err_gen_2 = F.mse_loss(x2, self.relu(pred_x2_gen), reduction='mean')
-        
-        # x2 -> x1 (Tanh per paper requirement)
-        pred_x1_gen = self.W2(self.relu(x2))
-        err_gen_1 = F.mse_loss(x1, self.tanh(pred_x1_gen), reduction='mean')
-        
-        E_gen = 0.5 * Config.alpha_gen * (err_gen_1 + err_gen_2 + err_gen_3 + err_gen_4 + err_gen_5)
-        
-        return E_disc + E_gen, E_disc, E_gen
+            new_x = [t.clone() for t in x]
+            
+            for l in range(start_idx, end_idx + 1):
+                # Gradient term from local errors
+                grad = -eps_gen[l] - eps_disc[l]
+                
+                # Propagated errors
+                # From below: eps_gen[l-1] * W^T
+                layer_below = self.layers[l-1]
+                prop_gen = torch.matmul(eps_gen[l-1], layer_below.W.weight)
+                
+                # From above: eps_disc[l+1] * V^T
+                if l < len(self.layers):
+                    layer_above = self.layers[l]
+                    prop_disc = torch.matmul(eps_disc[l+1], layer_above.V.weight)
+                else:
+                    prop_disc = 0
 
-# ==========================================
-# Training & Evaluation Functions
-# ==========================================
+                f_prime = self.act_deriv(x[l])
+                delta = grad + f_prime * (prop_gen + prop_disc)
+                new_x[l] = x[l] + lr_x * delta
+            
+            x = new_x
+            
+        return x
 
-def run_pc_inference(model, images, labels, steps, mode='train'):
+# ---------------------------------------------------------
+# 4. コスト計算 (MACs & FLOPs)
+# ---------------------------------------------------------
+def calculate_bpc_costs(model, batch_size, inference_steps, is_training=True):
     """
-    推論フェーズ: ニューロン活動 x を更新してエネルギーを最小化
+    bPCの計算コスト:
+    1. 初期化 (1 pass)
+    2. 反復推論 (T steps): 各ステップで V, W, V^T, W^T の4回の行列演算
+    3. 重み更新 (Training): V, W の勾配計算 (2回)
     """
-    nodes = model.init_layers(images)
+    layer_sizes = [784, 500, 500, 500, 10]
     
-    # x6 (Label層) のクランプ処理
-    if mode == 'train':
-        with torch.no_grad():
-            one_hot = F.one_hot(labels, num_classes=10).float().to(Config.device)
-            nodes[-1].data = one_hot
+    macs_per_pass = 0
+    flops_per_pass = 0
+    
+    for i in range(len(layer_sizes) - 1):
+        n_in = layer_sizes[i]
+        n_out = layer_sizes[i+1]
         
-        # ラベル層以外を更新対象にする
-        train_nodes = [n for i, n in enumerate(nodes) if n.requires_grad and i != 5]
-        x_optim = optim.SGD(train_nodes, lr=Config.lr_x)
+        # Linear layer cost
+        layer_macs = n_in * n_out
+        layer_flops = 2 * layer_macs + 2 * n_out # + Activation
         
-    elif mode == 'test':
-        # ラベル層も含めて更新（推論）する
-        x_optim = optim.SGD([n for n in nodes if n.requires_grad], lr=Config.lr_x)
+        macs_per_pass += layer_macs
+        flops_per_pass += layer_flops
 
-    model.eval() # BatchNorm等がないので影響小だが作法として
+    total_macs = 0
+    total_flops = 0
     
-    losses = []
+    # 1. Initialization (Bottom-up)
+    total_macs += macs_per_pass * batch_size
+    total_flops += flops_per_pass * batch_size
     
-    for t in range(steps):
-        x_optim.zero_grad()
+    # 2. Inference Loops (T steps) -> 4x Matrix Mult per layer per step
+    # (V forward, W forward, V backward error, W backward error)
+    inference_macs = (macs_per_pass * 4) * batch_size * inference_steps
+    inference_flops = (flops_per_pass * 4) * batch_size * inference_steps
+    
+    total_macs += inference_macs
+    total_flops += inference_flops
+    
+    # 3. Weight Update (Training only) -> 2x Matrix Mult (dV, dW)
+    if is_training:
+        update_macs = (macs_per_pass * 2) * batch_size
+        update_flops = (flops_per_pass * 2) * batch_size
+        total_macs += update_macs
+        total_flops += update_flops
         
-        total_energy, _, _ = model.compute_energy(nodes)
-        total_energy.backward()
-        
-        x_optim.step()
-        
-        # Train時はラベルを再度固定（念のため）
-        if mode == 'train':
+    return total_macs, total_flops
+
+# ---------------------------------------------------------
+# 5. メインループ
+# ---------------------------------------------------------
+def main():
+    device = torch.device(CONFIG['device'])
+    print(f"=== bPC Training (Paper Hyperparams) on {device} ===")
+    print(f"Config: {CONFIG}")
+    
+    train_loader, val_loader, test_loader = get_dataloaders(CONFIG['batch_size'])
+    model = bPC_Net(hidden_size=CONFIG['hidden_size']).to(device)
+    
+    # 論文 Table 8: AdamW with weight_decay
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG['lr_weights'], weight_decay=CONFIG['weight_decay'])
+    
+    total_macs = 0.0
+    total_flops = 0.0
+    start_time = time.time()
+    reached_target = False
+    
+    print("-" * 95)
+    print(f"{'Epoch':<6} | {'Batch':<6} | {'Val Acc':<10} | {'G-MACs':<15} | {'G-FLOPs':<15} | {'Time (s)':<10}")
+    print("-" * 95)
+
+    for epoch in range(1, CONFIG['max_epochs'] + 1):
+        for batch_idx, (images, labels) in enumerate(train_loader, 1):
+            images, labels = images.to(device), labels.to(device)
+            bs = images.size(0)
+            
+            # 1. Init
+            activities = model.forward_init(images)
+            
+            # 2. Inference (T=8)
             with torch.no_grad():
-                one_hot = F.one_hot(labels, num_classes=10).float().to(Config.device)
-                nodes[-1].data = one_hot
+                final_activities = model.run_inference(
+                    activities, images, labels, 
+                    steps=CONFIG['T_train'], 
+                    lr_x=CONFIG['lr_activities'], 
+                    is_training=True
+                )
+            
+            # 3. Weight Update (Loss based)
+            optimizer.zero_grad()
+            loss_total = 0
+            x = final_activities
+            
+            for l in range(len(model.layers)):
+                layer = model.layers[l]
+                # Disc Loss
+                if l < len(model.layers):
+                    pred_up = layer.activation(layer.V(x[l]))
+                    loss_disc = 0.5 * CONFIG['alpha_disc'] * torch.sum((x[l+1].detach() - pred_up)**2)
+                    loss_total += loss_disc
+                
+                # Gen Loss
+                pred_down = layer.W(layer.activation(x[l+1].detach()))
+                loss_gen = 0.5 * CONFIG['alpha_gen'] * torch.sum((x[l].detach() - pred_down)**2)
+                loss_total += loss_gen
+            
+            loss_total.backward()
+            optimizer.step()
+            
+            # Cost
+            b_macs, b_flops = calculate_bpc_costs(model, bs, CONFIG['T_train'], is_training=True)
+            total_macs += b_macs
+            total_flops += b_flops
+            
+            # Validation
+            if batch_idx % CONFIG['val_interval'] == 0:
+                val_acc = run_validation(model, val_loader, device)
+                elapsed = time.time() - start_time
+                print(f"{epoch:<6} | {batch_idx:<6} | {val_acc:<10.2f} | {total_macs/1e9:<15.2f} | {total_flops/1e9:<15.2f} | {elapsed:<10.2f}")
+                
+                if val_acc >= CONFIG['target_accuracy']:
+                    print("-" * 95)
+                    print("Target Accuracy Reached!")
+                    reached_target = True
+                    break
         
-        losses.append(total_energy.item())
-        
-    return nodes, losses
+        if reached_target:
+            break
 
-def train_one_epoch(model, dataloader, optimizer_theta):
-    model.train()
-    running_loss = 0.0
+    # Final Test
+    print("\nRunning Final Test (T=100)...")
+    test_acc = run_validation(model, test_loader, device)
+    print(f"Final Test Accuracy: {test_acc:.2f}%")
     
-    pbar = tqdm(dataloader, desc="Training", leave=False)
-    
-    for images, labels in pbar:
-        images, labels = images.to(Config.device), labels.to(Config.device)
-        
-        # 1. 推論フェーズ (x の更新)
-        nodes, _ = run_pc_inference(model, images, labels, Config.T_train, mode='train')
-        
-        # 2. 学習フェーズ (パラメータ θ の更新)
-        optimizer_theta.zero_grad()
-        
-        # 推論後の平衡状態でのエネルギーを再計算
-        # (ここで計算グラフを重みパラメータに接続する)
-        total_energy, _, _ = model.compute_energy(nodes)
-        
-        total_energy.backward()
-        
-        # 勾配クリッピング（安定化のため）
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        
-        optimizer_theta.step()
-        
-        running_loss += total_energy.item()
-        pbar.set_postfix({'Energy': f"{total_energy.item():.4f}"})
+    inf_macs, _ = calculate_bpc_costs(model, 1, CONFIG['T_test'], is_training=False)
+    print(f"Total Training Cost: {total_macs/1e9:.2f} G-MACs")
+    print(f"Inference Cost per Sample (T={CONFIG['T_test']}): {inf_macs/1e6:.2f} M-MACs")
 
-    return running_loss / len(dataloader)
-
-def evaluate(model, dataloader):
-    model.eval()
+def run_validation(model, loader, device):
     correct = 0
     total = 0
-    
-    # パラメータ更新はしないが、推論のために勾配計算(xについて)は必要
-    # torch.no_grad()の外側、あるいは内側でenable_grad()を使う
-    
-    with torch.no_grad(): # 重み固定
-        for images, labels in tqdm(dataloader, desc="Testing", leave=False):
-            images, labels = images.to(Config.device), labels.to(Config.device)
-            
-            # 推論のために一時的に勾配計算を有効化
-            with torch.enable_grad():
-                nodes, _ = run_pc_inference(model, images, labels, Config.T_test, mode='test')
-            
-            # 最上位層 x6 の最大値を持つクラスを予測とする
-            pred_logits = nodes[-1]
-            predictions = torch.argmax(pred_logits, dim=1)
-            
-            total += labels.size(0)
-            correct += (predictions == labels).sum().item()
-            
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        activities = model.forward_init(images)
+        with torch.no_grad():
+            # 検証時は T=100 で推論 (論文 Table 8)
+            final_activities = model.run_inference(
+                activities, images, y_target=None, 
+                steps=CONFIG['T_test'],
+                lr_x=CONFIG['lr_activities'], 
+                is_training=False
+            )
+        output = final_activities[-1]
+        _, predicted = torch.max(output, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
     return 100 * correct / total
-
-# ==========================================
-# Main
-# ==========================================
-
-def main():
-    print(f"=== VGG-bPC Fully Supervised Training ===")
-    print(f"Device: {Config.device}")
-    print(f"Config: batch={Config.batch_size}, lr_x={Config.lr_x}, reduction='mean'")
-    
-    print("Loading Data...")
-    train_loader, test_loader = get_dataloaders()
-    
-    print("Initializing Model...")
-    model = VGG_bPC(num_classes=10).to(Config.device)
-    
-    # 重み学習用オプティマイザ
-    optimizer_theta = optim.AdamW(model.parameters(), lr=Config.lr_theta, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_theta, T_max=Config.epochs)
-
-    print("Starting Training...")
-    
-    history = {'loss': [], 'acc': []}
-    
-    for epoch in range(Config.epochs):
-        loss = train_one_epoch(model, train_loader, optimizer_theta)
-        acc = evaluate(model, test_loader)
-        
-        scheduler.step()
-        
-        history['loss'].append(loss)
-        history['acc'].append(acc)
-        
-        print(f"Epoch {epoch+1}/{Config.epochs} | Loss: {loss:.6f} | Test Acc: {acc:.2f}%")
-        
-    # 結果のプロット
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-
-    color = 'tab:red'
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Energy Loss (Mean)', color=color)
-    ax1.plot(history['loss'], color=color, marker='o', label='Train Energy')
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid(True, alpha=0.3)
-
-    ax2 = ax1.twinx()  
-    color = 'tab:blue'
-    ax2.set_ylabel('Accuracy (%)', color=color)
-    ax2.plot(history['acc'], color=color, marker='s', label='Test Acc')
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    fig.tight_layout()
-    plt.title("VGG-bPC CIFAR-10 Training Curve")
-    plt.savefig("training_curve.png")
-    plt.show()
-
-    print("Training Complete.")
 
 if __name__ == "__main__":
     main()
