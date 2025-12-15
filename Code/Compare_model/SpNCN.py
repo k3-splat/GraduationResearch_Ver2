@@ -329,7 +329,7 @@ def run_experiment(dataset_name='MNIST'):
 
 if __name__ == "__main__":
     # MNISTの実験を実行
-    run_experiment('MNIST')
+    # run_experiment('MNIST')
     
     # 必要であれば以下をコメントアウト解除して実行
-    # run_experiment('FashionMNIST')
+    run_experiment('FashionMNIST')
