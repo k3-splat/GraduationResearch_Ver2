@@ -1,0 +1,22 @@
+Starting bPC Experiment. Logs will be saved to logs/bPC_log_20260110_213416.txt and logs/bPC_metrics_20260110_213416.csv
+
+============================================================
+PHASE 1: Hyperparameter Search (Optuna)
+============================================================
+Best Search Accuracy: 96.16%
+Best Params: {'activation': 'leaky_relu', 'lr_activities': 0.06915887122730202, 'momentum': 0.5, 'lr_weights': 0.000986599980148046, 'weight_decay': 6.002407350877161e-05, 'alpha_gen': 0.0001}
+
+============================================================
+PHASE 2: Cost Measurement (Target: 95.0%)
+============================================================
+Epoch  | Test Acc   | G-FPO      | GB-Data    | W-Ent    | ID-L1   
+---------------------------------------------------------------------------
+1      | 49.60      | 16.07      | 0.26       | 3.89     | 15.22   
+1      | 95.21      | 1623.50    | 26.42      | 4.34     | 10.28   
+
+=== Final Report ===
+Goal Reached in 31.97 seconds.
+Total Steps: 101
+Total FPO: 1623.4982 G
+Total Data Movement: 26.4173 GB
+Data saved to: logs/bPC_metrics_20260110_213416.csv
