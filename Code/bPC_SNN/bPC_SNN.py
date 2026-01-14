@@ -11,6 +11,7 @@ import os
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
+    't_ref' : 1,
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -28,18 +29,15 @@ CONFIG = {
     'save_dir': './results/SpNCN_Comparison'
 }
 
-# データ・ラベル層とのやり取りが怪しい
-
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
 
 class bPC_SNNLayer(nn.Module):
-    def __init__(self, idx, output_dim, config, data=False, label=False):
+    def __init__(self, idx, output_dim, config, data=False):
         super().__init__()
         self.idx = idx
         self.dim = output_dim
         self.cfg = config
         self.is_data_layer = data
-        self.is_label_layer = label
         
         # 内部状態
         self.v = None
@@ -48,6 +46,7 @@ class bPC_SNNLayer(nn.Module):
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
+        self.ref_count = None # 不応期カウンタ
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -56,35 +55,52 @@ class bPC_SNNLayer(nn.Module):
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
-
-    def switch_label_mode(self):
-        self.is_label_layer = not self.is_label_layer
+        self.ref_count = torch.zeros(batch_size, self.dim, device=device) # 不応期カウンタの初期化
 
     def update_state(self, total_input_current):
+        # 隠れ層: LIF Dynamics
+        dt = self.cfg['dt']
+        
+        # 不応期カウンタの更新（減少）
+        # カウンタが0未満にならないようにクリップ
+        if self.ref_count is not None:
+            self.ref_count = torch.clamp(self.ref_count - dt, min=0)
+
+        # 電流ダイナミクス
+        d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
+        self.j = self.j + (dt / self.cfg['tau_j']) * d_j
+        
+        # 膜電位ダイナミクス
+        # 不応期中のニューロン(ref_count > 0)は膜電位を更新しない（積分停止）
+        is_refractory = (self.ref_count > 0).float()
+        
+        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
+        
+        # 不応期でないニューロンのみ膜電位を更新
+        self.v = self.v + (1 - is_refractory) * (dt / self.cfg['tau_m']) * d_v
+        
+        # スパイク判定
+        spikes = (self.v > self.cfg['thresh']).float()
+        self.s = spikes
+        
+        # スパイク後の処理
+        # 1. 膜電位のリセット（ここでは0にリセット）
+        self.v = self.v * (1 - spikes)
+        
+        # 2. 不応期の設定
+        # スパイクしたニューロンの不応期カウンタを t_ref に設定
+        # configに 't_ref' (不応期期間) が含まれていることを前提とします
+        if spikes.sum() > 0:
+            self.ref_count = torch.where(
+                spikes.bool(), 
+                torch.tensor(self.cfg['t_ref'], device=self.v.device), 
+                self.ref_count
+            )
+        
+        # Trace Update (filtered spikes)
         if self.is_data_layer:
-            # 入力層/出力層: 外部入力またはターゲットで値を固定（または強く駆動）
-            # ここではシンプルに受け取った値をそのまま x (状態) とする
-            self.x = total_input_current
-        elif self.is_label_layer:
-            self.s = total_input_current
-            self.x = total_input_current
+            self.x = spikes
         else:
-            # 隠れ層: LIF Dynamics
-            dt = self.cfg['dt']
-            
-            # 電流ダイナミクス
-            d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
-            self.j = self.j + (dt / self.cfg['tau_j']) * d_j
-            
-            # 膜電位ダイナミクス
-            d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-            self.v = self.v + (dt / self.cfg['tau_m']) * d_v
-            
-            spikes = (self.v > self.cfg['thresh']).float()
-            self.s = spikes
-            self.v = self.v * (1 - spikes) 
-            
-            # Trace Update (filtered spikes)
             self.x = self.x - (1 / self.cfg['tau_tr']) * self.x + spikes
 
 
@@ -98,8 +114,7 @@ class bPC_SNN(nn.Module):
         # レイヤー生成
         for i, size in enumerate(layer_sizes):
             is_data = (i == 0)
-            is_label = (i == len(layer_sizes) - 1)
-            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data, label=is_label))
+            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data))
             
         # --- 重み定義 ---
         self.W = nn.ParameterList() # Top-down (Upper -> Lower) [Generative]
@@ -137,38 +152,32 @@ class bPC_SNN(nn.Module):
             
             # 最下層 (Input Data)
             if i == 0:
-                total_input = x_data
+                s_upper = self.layers[i+1].s
+                total_input = torch.matmul(s_upper, self.W[i].t())
             
             # 最上位層かつ学習時 (Target Clamp)
-            # layer.label が True のときだけここに入る
-            elif i == len(self.layers) - 1 and layer.is_label_layer: 
-                total_input = y_target
+            elif i == len(self.layers) - 1 and y_target is not None: 
+                s_lower = self.layers[i-1].s
+                total_input = torch.matmul(s_lower, self.V[i-1].t())
 
             # それ以外 (Hidden Layers OR Testing Label Layer)
             else:
-                # 自身の予測誤差による抑制 (Self Inhibition)
-                total_input += (- layer.e_gen)
-                total_input += (- layer.e_disc)
-
                 # 上からの予測/誤差フィードバック (Top-down)
                 # 最上位層でない場合のみ、上の層(i+1)からの入力がある
                 if i < len(self.layers) - 1:
+                    total_input += (- layer.e_gen)
+
                     e_disc_upper = self.layers[i+1].e_disc
                     # V[i]: layer[i] -> layer[i+1] (bottom-up)
                     # Feedback: e_disc_{i+1} @ V[i]
-                    # ※注意: ParameterListのインデックスは層インデックスと一致させる必要があります
-                    # 通常 V[i] は layer[i] と layer[i+1] を繋ぐ
                     total_input += torch.matmul(e_disc_upper, self.V[i]) 
                 
-                # 下からの予測/誤差フィードバック (Bottom-up)
-                # 最下層以外 (i > 0) なら必ず下の層(i-1)がある
-                if i > 0:
-                    e_gen_lower = self.layers[i-1].e_gen
-                    # W[i-1]: layer[i] -> layer[i-1] ? あるいは layer[i-1]->layer[i]?
-                    # 定義: W connects Layer[i-1] and Layer[i].
-                    # もし W[i-1] が (Lower, Upper) なら、Top-downは Upper -> Lower.
-                    # e_gen_lower (Lower error) を受け取るには W[i-1] を通す
-                    total_input += torch.matmul(e_gen_lower, self.W[i-1])
+                total_input += (- layer.e_disc)
+
+                e_gen_lower = self.layers[i-1].e_gen
+                # W[i-1] : layer[i-1] <- layer[i] (top-down)
+                # Feedback: e_gen_{i-1} @ W[i-1]
+                total_input += torch.matmul(e_gen_lower, self.W[i-1])
 
             layer.update_state(total_input)
 
@@ -178,20 +187,20 @@ class bPC_SNN(nn.Module):
 
         # 全層の状態更新後、予測誤差を再計算
         for i, layer in enumerate(self.layers):
-            # e_gen: x_l - W_{l+1->l} * s_{l+1}
-            # 最上位層以外は上からの生成予測を受ける
-            if i < len(self.layers) - 1:
-                s_upper = self.layers[i+1].s
-                # W[i]: (L_i, L_{i+1}). Pred: s_upper @ W[i].T -> (B, L_{i+1}) @ (L_{i+1}, L_i) -> (B, L_i)
-                z_gen_pred = torch.matmul(s_upper, self.W[i].t())
-                layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
+            if i == 0:
+                layer.e_gen = alpha_gen * (x_data - layer.x)
+            elif i == len(self.layers) - 1 and y_target is not None:
+                layer.e_disc = alpha_disc * (y_target - layer.s)
+            else:
+                if i < (len(self.layers) - 1):
+                    s_upper = self.layers[i+1].s
+                    # W[i]: (L_i, L_{i+1}). Pred: s_upper @ W[i].T -> (B, L_{i+1}) @ (L_{i+1}, L_i) -> (B, L_i)
+                    z_gen_pred = torch.matmul(s_upper, self.W[i].t())
+                    layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
 
-                if training_mode: 
-                    self.total_synops += s_upper.sum().item() * layer.dim
-            
-            # e_disc: x_l - V_{l-1->l} * s_{l-1}
-            # 最下位層以外は下からの識別予測を受ける
-            if i > 0:
+                    if training_mode: 
+                        self.total_synops += s_upper.sum().item() * layer.dim
+
                 s_lower = self.layers[i-1].s
                 # V[i-1]: (L_i, L_{i-1}). Pred: s_lower @ V[i-1].T -> (B, L_{i-1}) @ (L_{i-1}, L_i) -> (B, L_i)
                 z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
@@ -301,10 +310,6 @@ def run_experiment(dataset_name='MNIST'):
 
         train_acc = 100 * train_correct / train_samples
         epoch_synops = model.total_synops
-        
-        # --- Testing ---
-        print("Switching label layer to Inference Mode (LIF)...")
-        model.layers[-1].switch_label_mode()  # フラグ反転: True -> False
 
         model.eval()
         test_correct = 0
@@ -337,9 +342,6 @@ def run_experiment(dataset_name='MNIST'):
         epoch_time = time.time() - epoch_start
         
         print(f"Epoch {epoch} DONE | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s | G-SynOps: {epoch_synops/1e9:.3f}")
-        
-        print("Switching label layer back to Training Mode (Clamp)...")
-        model.layers[-1].switch_label_mode()  # フラグ復帰: False -> True
 
         logs.append({
             'dataset': dataset_name,
