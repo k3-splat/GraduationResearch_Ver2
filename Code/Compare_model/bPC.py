@@ -39,13 +39,30 @@ COMMON_CONFIG = {
     'val_interval': 100,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     
-    # 探索用設定
+    # -----------------------------------------------------------
+    # [制御フラグ] Trueなら探索を実行、Falseなら下記fixed_paramsを使用
+    # -----------------------------------------------------------
+    'run_search': True, 
+
+    # 探索をスキップする場合に使用する固定パラメータ (前回の探索結果などをここに入力)
+    'fixed_params': {
+        'activation': 'leaky_relu',
+        'lr_activities': 0.05,
+        'momentum': 0.9,
+        'lr_weights': 1e-4,
+        'weight_decay': 1e-4,
+        'alpha_gen': 0.1,
+        'alpha_disc': 1.0, # 通常は1.0固定
+        'T_train': 8,      # 学習時のステップ数
+        'T_eval': 100      # 評価時のステップ数 (多めに設定)
+    },
+
+    # 探索用設定 (Phase 1)
     'search_trials': 20,    
     'search_epochs': 5,     
     
-    # 測定用設定
-    'measure_target_acc': 95.0, 
-    'measure_max_epochs': 50,   
+    # 本番学習用設定 (Phase 2)
+    'final_epochs': 50,    # 固定エポック数
 }
 
 # =============================================================================
@@ -253,7 +270,7 @@ def search_hyperparameters():
         
         return val_acc
 
-    # Optunaのログは冗長なので少し抑制
+    # Optunaのログ抑制
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=COMMON_CONFIG['search_trials'])
@@ -266,7 +283,7 @@ def search_hyperparameters():
     return best_params
 
 # =============================================================================
-# [Phase 2] コスト計測 (Metrics Calculation)
+# [Phase 2] 学習とコスト計測 (Metrics Calculation)
 # =============================================================================
 def compute_twonn_id(data):
     N = data.shape[0]
@@ -304,9 +321,11 @@ def calculate_pass_costs(model, batch_size):
         fpo += (batch_size * n_in * n_out) * 2
     return dm_bytes, fpo
 
-def measure_cost(best_params, csv_path):
+def run_fixed_epoch_training(best_params, csv_path):
+    epochs = COMMON_CONFIG['final_epochs']
     print("\n" + "="*60)
-    print(f"PHASE 2: Cost Measurement (Target: {COMMON_CONFIG['measure_target_acc']}%)")
+    print(f"PHASE 2: Final Training (Fixed Epochs: {epochs})")
+    print(f"Using Params: {best_params}")
     print("="*60)
     
     device = torch.device(COMMON_CONFIG['device'])
@@ -323,12 +342,12 @@ def measure_cost(best_params, csv_path):
     total_dm = 0.0
     total_steps = 0
     start_time = time.time()
-    reached = False
     
     print(f"{'Epoch':<6} | {'Test Acc':<10} | {'G-FPO':<10} | {'GB-Data':<10} | {'W-Ent':<8} | {'ID-L1':<8}")
     print("-" * 75)
     
-    for epoch in range(1, COMMON_CONFIG['measure_max_epochs'] + 1):
+    for epoch in range(1, epochs + 1):
+        model.train()
         for batch_idx, (images, labels) in enumerate(train_loader):
             images, labels = images.to(device), labels.to(device)
             bs = images.size(0)
@@ -370,34 +389,28 @@ def measure_cost(best_params, csv_path):
             total_dm += dm * 2; total_fpo += fpo * 2
             total_steps += 1
             
-            if batch_idx % COMMON_CONFIG['val_interval'] == 0:
-                acc = run_validation(model, test_loader, device, best_params)
-                w_ent = compute_weight_entropy(model)
-                id_l1 = compute_twonn_id(x[1].detach().cpu().numpy())
-                elapsed = time.time() - start_time
-                
-                # 画面表示
-                print(f"{epoch:<6} | {acc:<10.2f} | {total_fpo/1e9:<10.2f} | {total_dm/1e9:<10.2f} | {w_ent:<8.2f} | {id_l1:<8.2f}")
-                
-                # CSV保存
-                with open(csv_path, 'a', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow([epoch, acc, total_fpo/1e9, total_dm/1e9, w_ent, id_l1, elapsed])
-                
-                if acc >= COMMON_CONFIG['measure_target_acc']:
-                    reached = True
-                    break
-        if reached: break
+        # End of epoch validation & logging
+        acc = run_validation(model, test_loader, device, best_params)
+        w_ent = compute_weight_entropy(model)
+        # 1層目のIDを計算 (x[1])
+        id_l1 = compute_twonn_id(x[1].detach().cpu().numpy())
+        elapsed = time.time() - start_time
+        
+        # 画面表示
+        print(f"{epoch:<6} | {acc:<10.2f} | {total_fpo/1e9:<10.2f} | {total_dm/1e9:<10.2f} | {w_ent:<8.2f} | {id_l1:<8.2f}")
+        
+        # CSV保存
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch, acc, total_fpo/1e9, total_dm/1e9, w_ent, id_l1, elapsed])
 
     print("\n=== Final Report ===")
-    if reached:
-        print(f"Goal Reached in {time.time()-start_time:.2f} seconds.")
-        print(f"Total Steps: {total_steps}")
-        print(f"Total FPO: {total_fpo/1e9:.4f} G")
-        print(f"Total Data Movement: {total_dm/1e9:.4f} GB")
-        print(f"Data saved to: {csv_path}")
-    else:
-        print("Target accuracy not reached within max epochs.")
+    print(f"Completed {epochs} Epochs in {time.time()-start_time:.2f} seconds.")
+    print(f"Final Accuracy: {acc:.2f}%")
+    print(f"Total Steps: {total_steps}")
+    print(f"Total FPO: {total_fpo/1e9:.4f} G")
+    print(f"Total Data Movement: {total_dm/1e9:.4f} GB")
+    print(f"Data saved to: {csv_path}")
 
 # =============================================================================
 # Main
@@ -416,8 +429,14 @@ if __name__ == "__main__":
     
     print(f"Starting bPC Experiment. Logs will be saved to {log_file} and {csv_file}")
     
-    # 1. 探索
-    best_params = search_hyperparameters()
+    # 設定に応じて探索を実行するか、固定パラメータを使用するか分岐
+    if COMMON_CONFIG['run_search']:
+        # 1. 探索
+        best_params = search_hyperparameters()
+    else:
+        # 探索スキップ
+        print("\nSkipping Hyperparameter Search...")
+        best_params = COMMON_CONFIG['fixed_params']
     
-    # 2. 測定 (CSVパスを渡す)
-    measure_cost(best_params, csv_file)
+    # 2. 学習 (固定エポック数)
+    run_fixed_epoch_training(best_params, csv_file)
