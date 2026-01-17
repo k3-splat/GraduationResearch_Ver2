@@ -56,13 +56,12 @@ def generate_poisson_spikes(data, num_steps, config):
 
 
 class bPC_SNNLayer(nn.Module):
-    def __init__(self, idx, output_dim, config, data=False, label=False):
+    def __init__(self, idx, output_dim, config, data=False):
         super().__init__()
         self.idx = idx
         self.dim = output_dim
         self.cfg = config
         self.is_data_layer = data
-        self.is_label_layer = label
         
         # 内部状態
         self.v = None
@@ -73,6 +72,7 @@ class bPC_SNNLayer(nn.Module):
         
         self.e_gen = None
         self.e_disc = None
+        self.ref_count = None # 不応期カウンタ
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -83,9 +83,7 @@ class bPC_SNNLayer(nn.Module):
         
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
-
-    def switch_label_mode(self):
-        self.is_label_layer = not self.is_label_layer
+        self.ref_count = torch.zeros(batch_size, self.dim, device=device) # 不応期カウンタの初期化
 
     def update_state(self, total_input_current):
         if self.is_data_layer or self.is_label_layer:
@@ -144,8 +142,7 @@ class bPC_SNN(nn.Module):
         # レイヤー生成
         for i, size in enumerate(layer_sizes):
             is_data = (i == 0)
-            is_label = (i == len(layer_sizes) - 1)
-            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data, label=is_label))
+            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data))
             
         # --- 重み定義 ---
         self.W = nn.ParameterList() # Top-down
@@ -187,6 +184,8 @@ class bPC_SNN(nn.Module):
                 total_input += (- layer.e_disc)
 
                 if i < len(self.layers) - 1:
+                    total_input += (- layer.e_gen)
+
                     e_disc_upper = self.layers[i+1].e_disc
                     total_input += torch.matmul(e_disc_upper, self.V[i]) 
                 
