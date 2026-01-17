@@ -42,16 +42,16 @@ COMMON_CONFIG = {
     # -----------------------------------------------------------
     # [制御フラグ] Trueなら探索を実行、Falseなら下記fixed_paramsを使用
     # -----------------------------------------------------------
-    'run_search': True, 
+    'run_search': False, 
 
     # 探索をスキップする場合に使用する固定パラメータ (前回の探索結果などをここに入力)
     'fixed_params': {
         'activation': 'leaky_relu',
-        'lr_activities': 0.05,
+        'lr_activities': 0.05227544458892151,
         'momentum': 0.9,
-        'lr_weights': 1e-4,
-        'weight_decay': 1e-4,
-        'alpha_gen': 0.1,
+        'lr_weights': 0.0004378647738806029,
+        'weight_decay': 0.002147533595886586,
+        'alpha_gen': 0.0001,
         'alpha_disc': 1.0, # 通常は1.0固定
         'T_train': 8,      # 学習時のステップ数
         'T_eval': 100      # 評価時のステップ数 (多めに設定)
@@ -62,7 +62,7 @@ COMMON_CONFIG = {
     'search_epochs': 5,     
     
     # 本番学習用設定 (Phase 2)
-    'final_epochs': 50,    # 固定エポック数
+    'final_epochs': 10,    # 固定エポック数
 }
 
 # =============================================================================

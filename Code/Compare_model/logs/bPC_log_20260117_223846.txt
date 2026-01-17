@@ -1,0 +1,28 @@
+Starting bPC Experiment. Logs will be saved to logs/bPC_log_20260117_223846.txt and logs/bPC_metrics_20260117_223846.csv
+
+Skipping Hyperparameter Search...
+
+============================================================
+PHASE 2: Final Training (Fixed Epochs: 10)
+Using Params: {'activation': 'leaky_relu', 'lr_activities': 0.05227544458892151, 'momentum': 0.9, 'lr_weights': 0.0004378647738806029, 'weight_decay': 0.002147533595886586, 'alpha_gen': 0.0001, 'alpha_disc': 1.0, 'T_train': 8, 'T_eval': 100}
+============================================================
+Epoch  | Test Acc   | G-FPO      | GB-Data    | W-Ent    | ID-L1   
+---------------------------------------------------------------------------
+1      | 95.62      | 3139.50    | 51.17      | 4.20     | 10.45   
+2      | 96.62      | 6279.00    | 102.34     | 4.17     | 10.42   
+3      | 97.21      | 9418.50    | 153.52     | 4.21     | 10.13   
+4      | 97.33      | 12558.00   | 204.69     | 4.27     | 10.26   
+5      | 97.59      | 15697.50   | 255.86     | 4.35     | 10.54   
+6      | 97.29      | 18837.00   | 307.03     | 4.25     | 12.82   
+7      | 97.58      | 21976.50   | 358.20     | 4.13     | 11.23   
+8      | 97.58      | 25116.00   | 409.37     | 4.04     | 11.21   
+9      | 97.42      | 28255.50   | 460.55     | 3.98     | 8.92    
+10     | 97.86      | 31395.00   | 511.72     | 3.92     | 10.36   
+
+=== Final Report ===
+Completed 10 Epochs in 235.46 seconds.
+Final Accuracy: 97.86%
+Total Steps: 1960
+Total FPO: 31395.0000 G
+Total Data Movement: 511.7168 GB
+Data saved to: logs/bPC_metrics_20260117_223846.csv

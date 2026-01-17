@@ -1,0 +1,12 @@
+Starting bPC Experiment. Logs will be saved to logs/bPC_log_20260117_223740.txt and logs/bPC_metrics_20260117_223740.csv
+
+Skipping Hyperparameter Search...
+
+============================================================
+PHASE 2: Final Training (Fixed Epochs: 50)
+Using Params: {'activation': 'leaky_relu', 'lr_activities': 0.05227544458892151, 'momentum': 0.9, 'lr_weights': 0.0004378647738806029, 'weight_decay': 0.002147533595886586, 'alpha_gen': 0.0001, 'alpha_disc': 1.0, 'T_train': 8, 'T_eval': 100}
+============================================================
+Epoch  | Test Acc   | G-FPO      | GB-Data    | W-Ent    | ID-L1   
+---------------------------------------------------------------------------
+1      | 95.61      | 3139.50    | 51.17      | 4.24     | 9.65    
+2      | 96.53      | 6279.00    | 102.34     | 4.29     | 10.16   
