@@ -1,0 +1,2 @@
+dt,T_r,T_st,R_m,beta,max_freq,batch_size,device,save_dir,search_epochs,train_subset,full_epochs,tau_m,tau_j,tau_tr,kappa_j,gamma_m,alpha_u,thresh,final_test_acc
+0.25,1.0,25,1.0,1.0,320.0,64,cuda,./results/SpNCN_Optuna,3,10000,10,1.0026919929944107,6.379902362434517,8.836277718535804,0.10686535976944411,0.9502019479007165,0.0007813395675172227,0.20525584244879297,62.16947115384615
