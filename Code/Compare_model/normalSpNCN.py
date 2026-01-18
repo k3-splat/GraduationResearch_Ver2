@@ -22,7 +22,7 @@ CONFIG = {
     'kappa_j': 0.25,     # 漏れ係数（入力電流）
     'gamma_m': 1.0,      # 漏れ係数（膜電位）
     'R_m': 1.0,          # 抵抗
-    'alpha_u': 0.001,     # 重み学習率 (抑制が入るため少し下げて調整)
+    'alpha_u': 0.001,    # 重み学習率 (抑制が入るため少し下げて調整)
     'beta': 1.0,         # 誤差重み学習率
     'thresh': 0.4,       # ベース発火閾値
     'max_freq' : 63.75,  # 最大周波数 (Hz)
@@ -191,7 +191,9 @@ class SpNCN(nn.Module):
         self.W = nn.ParameterList() 
         self.E = nn.ParameterList() 
         
-        self.z_data = torch.zeros_like(self.input_layer.x)
+        # self.z_data はここで定義すると self.input_layer.x が未定義のためエラーになります。
+        # reset_state で定義します。
+        
         h0_dim = hidden_sizes[0]
         self.W_x = nn.Parameter(torch.randn(input_size, h0_dim) * 0.05) 
         self.E_x = nn.Parameter(torch.randn(h0_dim, input_size) * 0.05) 
@@ -214,6 +216,10 @@ class SpNCN(nn.Module):
                      今回は「入力再提示」なので、v, j はリセットし、thetaは維持するのが一般的（ホメオスタシスの継続）。
         """
         self.input_layer.init_state(batch_size, device)
+        
+        # [修正] ここで z_data を初期化 (Batch, Input_Dim)
+        self.z_data = torch.zeros(batch_size, self.input_layer.dim, device=device)
+
         if self.label_layer is not None:
             self.label_layer.init_state(batch_size, device)
         for layer in self.hidden_layers:
