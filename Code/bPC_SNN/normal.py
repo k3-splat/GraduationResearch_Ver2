@@ -28,7 +28,7 @@ CONFIG = {
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/SpNCN_Comparison',
-    'max_freq': 1000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
+    'max_freq': 63.75   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
 }
 
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
