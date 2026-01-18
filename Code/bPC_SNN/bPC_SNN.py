@@ -11,10 +11,10 @@ import optuna
 FIXED_CONFIG = {
     'dt' : 0.25,          # 微小時間 (ms)
     'T_r' : 1.0,          # 絶対不応期 (ms)
-    'T_st' : 25,          # 1データ提示時間 (ms)
+    'T_st' : 200,          # 1データ提示時間 (ms)
     'max_freq' : 320.0,   # 最大周波数 (Hz)
     'R_m' : 1.0,          # 抵抗 (固定)
-    'alpha_disc' : 0.5,   # 識別係数 (固定または探索対象に含めても良いが今回は固定)
+    'alpha_disc' : 1.0,   # 識別係数 (固定または探索対象に含めても良いが今回は固定)
     'batch_size': 64,
     'epochs_per_trial': 3, # 1トライアルあたりのエポック数 (高速化のため少なめに)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
