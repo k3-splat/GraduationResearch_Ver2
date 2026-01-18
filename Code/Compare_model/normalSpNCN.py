@@ -242,23 +242,22 @@ class SpNCN(nn.Module):
         lr = self.config['alpha_u']
         beta = self.config['beta']
         
-        with torch.no_grad():
-            s_h0 = self.hidden_layers[0].s
-            e_x = self.input_layer.e
+        s_h0 = self.hidden_layers[0].s
+        e_x = self.input_layer.e
+        
+        self.W_x += lr * (e_x.t() @ s_h0)
+        self.E_x += lr * beta * (s_h0.t() @ e_x)
+        
+        if self.label_layer is not None:
+            e_y = self.label_layer.e
+            self.W_y += lr * (e_y.t() @ s_h0)
             
-            self.W_x += lr * (e_x.t() @ s_h0)
-            self.E_x += lr * beta * (s_h0.t() @ e_x)
-            
-            if self.label_layer is not None:
-                e_y = self.label_layer.e
-                self.W_y += lr * (e_y.t() @ s_h0)
-                
-            for i in range(len(self.hidden_layers) - 1):
-                s_upper = self.hidden_layers[i+1].s
-                e_lower = self.hidden_layers[i].e
+        for i in range(len(self.hidden_layers) - 1):
+            s_upper = self.hidden_layers[i+1].s
+            e_lower = self.hidden_layers[i].e
 
-                self.W[i] += lr * (e_lower.t() @ s_upper)
-                self.E[i] += lr * beta * (s_upper.t() @ e_lower)
+            self.W[i] += lr * (e_lower.t() @ s_upper)
+            self.E[i] += lr * beta * (s_upper.t() @ e_lower)
 
 def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
     """
@@ -302,86 +301,86 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
     
     # ループ条件を max_epochs に統一し、内部で mode による分岐を行う
-    while epoch < CONFIG['max_epochs']:
-        # --- Training ---
-        model.train()
-        epoch_start = time.time()
-        train_correct = 0
-        train_samples = 0
-        
-        for batch_idx, (imgs, lbls) in enumerate(train_l):
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+    with torch.no_grad():
+        while epoch < CONFIG['max_epochs']:
+            # --- Training ---
+            model.train()
+            epoch_start = time.time()
+            train_correct = 0
+            train_samples = 0
             
-            targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
-            targets.scatter_(1, lbls.view(-1, 1), 1)
-            
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            # CONFIG['num_steps'] does not exist in CONFIG. Using 'steps' calculated from T_st/dt.
-            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
-            
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            out_spikes = 0
-            
-            for t in range(steps):
-                x_t = spike_in[t]
-                # 学習モード
-                model.forward_dynamics(x_data=x_t, y_target=targets)
-                model.manual_weight_update()
-                model.clip_weights(20.0)
-                out_spikes += model.label_layer.s
+            for batch_idx, (imgs, lbls) in enumerate(train_l):
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 
-            _, pred = torch.max(out_spikes, 1)
-            train_correct += (pred == lbls).sum().item()
-            train_samples += lbls.size(0)
+                targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
+                targets.scatter_(1, lbls.view(-1, 1), 1)
+                
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                # CONFIG['num_steps'] does not exist in CONFIG. Using 'steps' calculated from T_st/dt.
+                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                out_spikes = 0
+                
+                for t in range(steps):
+                    x_t = spike_in[t]
+                    # 学習モード
+                    model.forward_dynamics(x_data=x_t, y_target=targets)
+                    model.manual_weight_update()
+                    model.clip_weights(20.0)
+                    out_spikes += model.label_layer.s
+                    
+                _, pred = torch.max(out_spikes, 1)
+                train_correct += (pred == lbls).sum().item()
+                train_samples += lbls.size(0)
 
-            # バッチごとの進捗表示
-            print(f"\rEpoch {epoch+1} [{batch_idx+1}/{len(train_l)}] | Running Train Acc: {100 * train_correct / train_samples:.2f}%", end="")
-        
-        print() # エポック終了後に改行
-        train_acc = 100 * train_correct / train_samples
-        
-        # --- Testing (Every Epoch) ---
-        model.eval()
-        test_correct = 0
-        test_samples = 0
-        
-        for imgs, lbls in test_l:
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                # バッチごとの進捗表示
+                print(f"\rEpoch {epoch+1} [{batch_idx+1}/{len(train_l)}] | Running Train Acc: {100 * train_correct / train_samples:.2f}%", end="")
             
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            out_spikes = 0
+            print() # エポック終了後に改行
+            train_acc = 100 * train_correct / train_samples
             
-            for t in range(steps):
-                x_t = spike_in[t]
-                with torch.no_grad():
+            # --- Testing (Every Epoch) ---
+            model.eval()
+            test_correct = 0
+            test_samples = 0
+            
+            for imgs, lbls in test_l:
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                out_spikes = 0
+                
+                for t in range(steps):
+                    x_t = spike_in[t]
                     # テスト中のSynOpsもコストとして計上
                     model.forward_dynamics(x_data=x_t, y_target=None)
-                out_spikes += model.label_layer.s
-            
-            _, pred = torch.max(out_spikes, 1)
-            test_correct += (pred == lbls).sum().item()
-            test_samples += lbls.size(0)
-            
-        test_acc = 100 * test_correct / test_samples
-        max_test_acc = max(max_test_acc, test_acc)
-        epoch_time = time.time() - epoch_start
+                    out_spikes += model.label_layer.s
+                
+                _, pred = torch.max(out_spikes, 1)
+                test_correct += (pred == lbls).sum().item()
+                test_samples += lbls.size(0)
+                
+            test_acc = 100 * test_correct / test_samples
+            max_test_acc = max(max_test_acc, test_acc)
+            epoch_time = time.time() - epoch_start
 
-        print(f"Epoch {epoch+1} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.2f}%")
-        
-        logs.append({
-            'epoch': epoch + 1,
-            'train_acc': train_acc,
-            'test_acc': test_acc
-        })
-        
-        epoch += 1
-        
-        # Target Accuracy Modeの場合の早期終了判定
-        if mode == 'target_acc' and max_test_acc >= CONFIG['target_acc']:
-            print(f"\nTarget Accuracy {CONFIG['target_acc']}% Reached at Epoch {epoch}.")
-            break
+            print(f"Epoch {epoch+1} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.2f}%")
+            
+            logs.append({
+                'epoch': epoch + 1,
+                'train_acc': train_acc,
+                'test_acc': test_acc
+            })
+            
+            epoch += 1
+            
+            # Target Accuracy Modeの場合の早期終了判定
+            if mode == 'target_acc' and max_test_acc >= CONFIG['target_acc']:
+                print(f"\nTarget Accuracy {CONFIG['target_acc']}% Reached at Epoch {epoch}.")
+                break
 
     # 最終結果保存
     df = pd.DataFrame(logs)

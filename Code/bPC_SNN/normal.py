@@ -279,32 +279,30 @@ class bPC_SNN(nn.Module):
         """
         alpha_u = self.config['alpha_u']
 
-        with torch.no_grad():
-            for i in range(len(self.layers)):
+        for i in range(len(self.layers)):
+            # Vの更新 (Discriminative weights)
+            if i < len(self.layers) - 1:
+                e_disc_upper = self.layers[i+1].e_disc
+                if i == 0:
+                    grad_V = torch.matmul(e_disc_upper.t(), x_data)
+                else:
+                    s_own = self.layers[i].s
+                    grad_V = torch.matmul(e_disc_upper.t(), s_own)
+
+                self.V[i] += alpha_u * grad_V
+
+            # Wの更新 (Generative weights)
+            if i > 0:
+                e_gen_lower = self.layers[i-1].e_gen
                 
-                # Vの更新 (Discriminative weights)
-                if i < len(self.layers) - 1:
-                    e_disc_upper = self.layers[i+1].e_disc
-                    if i == 0:
-                        grad_V = torch.matmul(e_disc_upper.t(), x_data)
-                    else:
-                        s_own = self.layers[i].s
-                        grad_V = torch.matmul(e_disc_upper.t(), s_own)
-
-                    self.V[i] += alpha_u * grad_V
-
-                # Wの更新 (Generative weights)
-                if i > 0:
-                    e_gen_lower = self.layers[i-1].e_gen
-                    
-                    if i == len(self.layers) - 1:
-                        if y_target is not None:
-                            grad_W = torch.matmul(e_gen_lower.t(), y_target)
-                            self.W[i-1] += alpha_u * grad_W
-                    else:
-                        s_own = self.layers[i].s
-                        grad_W = torch.matmul(e_gen_lower.t(), s_own)
+                if i == len(self.layers) - 1:
+                    if y_target is not None:
+                        grad_W = torch.matmul(e_gen_lower.t(), y_target)
                         self.W[i-1] += alpha_u * grad_W
+                else:
+                    s_own = self.layers[i].s
+                    grad_W = torch.matmul(e_gen_lower.t(), s_own)
+                    self.W[i-1] += alpha_u * grad_W
 
 def run_experiment(dataset_name='MNIST'):
     print(f"\n=== Running bPC-SNN on {dataset_name} ===")
@@ -333,86 +331,87 @@ def run_experiment(dataset_name='MNIST'):
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
     logs = []
 
-    for epoch in range(CONFIG['epochs']):
-        # --- Training ---
-        model.train()
-        epoch_start = time.time()
-        model.total_synops = 0 
+    with torch.no_grad():
+        for epoch in range(CONFIG['epochs']):
+            # --- Training ---
+            model.train()
+            epoch_start = time.time()
+            model.total_synops = 0 
+            
+            for batch_idx, (imgs, lbls) in enumerate(train_l):
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+                
+                # One-hotターゲット
+                targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
+                targets.scatter_(1, lbls.view(-1, 1), 1)
+                
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                
+                # ターゲットをポアソンスパイクに変換
+                spike_targets = generate_poisson_spikes(targets, steps, CONFIG)
+                
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                
+                sum_out_spikes = 0
+                
+                for t in range(steps):
+                    x_t = spike_in[t]
+                    # 時刻tのターゲットスパイク
+                    y_t = spike_targets[t]
+                    
+                    model.forward_dynamics(x_data=x_t, y_target=y_t, training_mode=True)
+                    
+                    model.manual_weight_update(x_data=x_t, y_target=y_t)
+                    model.clip_weights(20.0)
+                
+                if batch_idx % 100 == 0:
+                    print(f"Epoch {epoch} | Batch {batch_idx}")
         
-        for batch_idx, (imgs, lbls) in enumerate(train_l):
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
-            
-            # One-hotターゲット
-            targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
-            targets.scatter_(1, lbls.view(-1, 1), 1)
-            
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
-            
-            # ターゲットをポアソンスパイクに変換
-            spike_targets = generate_poisson_spikes(targets, steps, CONFIG)
-            
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            
-            sum_out_spikes = 0
-            
-            for t in range(steps):
-                x_t = spike_in[t]
-                # 時刻tのターゲットスパイク
-                y_t = spike_targets[t]
-                
-                model.forward_dynamics(x_data=x_t, y_target=y_t, training_mode=True)
-                
-                model.manual_weight_update(x_data=x_t, y_target=y_t)
-                model.clip_weights(20.0)
-            
-            if batch_idx % 100 == 0:
-                print(f"Epoch {epoch} | Batch {batch_idx}")
-    
-        # --- Testing ---
-        print("Switching label layer to Inference Mode (LIF)...")
-        model.layers[-1].switch_label_mode()
+            # --- Testing ---
+            print("Switching label layer to Inference Mode (LIF)...")
+            model.layers[-1].switch_label_mode()
 
-        model.eval()
-        test_correct = 0
-        test_samples = 0
-        
-        for imgs, lbls in test_l:
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+            model.eval()
+            test_correct = 0
+            test_samples = 0
             
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            sum_out_spikes = 0
-            
-            for t in range(steps):
-                x_t = spike_in[t]
-                with torch.no_grad():
-                    model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
+            for imgs, lbls in test_l:
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
                 
-                sum_out_spikes += model.layers[-1].s
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                sum_out_spikes = 0
+                
+                for t in range(steps):
+                    x_t = spike_in[t]
+                    with torch.no_grad():
+                        model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
+                    
+                    sum_out_spikes += model.layers[-1].s
+                
+                _, pred = torch.max(sum_out_spikes, 1)
+                test_correct += (pred == lbls).sum().item()
+                test_samples += lbls.size(0)
+                
+            test_acc = 100 * test_correct / test_samples
+            epoch_time = time.time() - epoch_start
             
-            _, pred = torch.max(sum_out_spikes, 1)
-            test_correct += (pred == lbls).sum().item()
-            test_samples += lbls.size(0)
+            print(f"Epoch {epoch} DONE | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
             
-        test_acc = 100 * test_correct / test_samples
-        epoch_time = time.time() - epoch_start
-        
-        print(f"Epoch {epoch} DONE | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
-        
-        print("Switching label layer back to Training Mode (Clamp)...")
-        model.layers[-1].switch_label_mode()
+            print("Switching label layer back to Training Mode (Clamp)...")
+            model.layers[-1].switch_label_mode()
 
-        logs.append({
-            'dataset': dataset_name,
-            'epoch': epoch,
-            'test_acc': test_acc,
-            'time': epoch_time
-        })
-        
-        df = pd.DataFrame(logs)
-        df.to_csv(f"{CONFIG['save_dir']}/log_{dataset_name}.csv", index=False)
+            logs.append({
+                'dataset': dataset_name,
+                'epoch': epoch,
+                'test_acc': test_acc,
+                'time': epoch_time
+            })
+            
+            df = pd.DataFrame(logs)
+            df.to_csv(f"{CONFIG['save_dir']}/log_{dataset_name}.csv", index=False)
 
 if __name__ == "__main__":
     run_experiment('MNIST')
