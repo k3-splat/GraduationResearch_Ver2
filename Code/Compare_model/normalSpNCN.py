@@ -21,7 +21,7 @@ CONFIG = {
     'beta': 1.0,        # 誤差重み学習率
     'thresh': 0.4,       # 発火閾値
     'max_freq' : 63.75, # 最大周波数
-    'batch_size': 64,
+    'batch_size': 1,
     'target_acc': 95.0,  # 目標テスト精度 (%) (target_accモードで使用)
     'max_epochs': 10,   # 最大エポック数 (fixed_epochsモードではこの回数実行)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
