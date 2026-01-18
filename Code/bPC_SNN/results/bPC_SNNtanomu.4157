@@ -1,0 +1,133 @@
+DO Python file
+
+=== Running bPC-SNN on MNIST ===
+Epoch 0 | Batch 0 | Train Acc (Clamped): 12.50%
+Epoch 0 | Batch 100 | Train Acc (Clamped): 10.40%
+Epoch 0 | Batch 200 | Train Acc (Clamped): 10.23%
+Epoch 0 | Batch 300 | Train Acc (Clamped): 9.88%
+Epoch 0 | Batch 400 | Train Acc (Clamped): 9.83%
+Epoch 0 | Batch 500 | Train Acc (Clamped): 9.88%
+Epoch 0 | Batch 600 | Train Acc (Clamped): 9.91%
+Epoch 0 | Batch 700 | Train Acc (Clamped): 9.91%
+Epoch 0 | Batch 800 | Train Acc (Clamped): 9.82%
+Epoch 0 | Batch 900 | Train Acc (Clamped): 9.86%
+Switching label layer to Inference Mode (LIF)...
+Epoch 0 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 413.3s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 1 | Batch 0 | Train Acc (Clamped): 6.25%
+Epoch 1 | Batch 100 | Train Acc (Clamped): 10.10%
+Epoch 1 | Batch 200 | Train Acc (Clamped): 9.49%
+Epoch 1 | Batch 300 | Train Acc (Clamped): 9.78%
+Epoch 1 | Batch 400 | Train Acc (Clamped): 9.96%
+Epoch 1 | Batch 500 | Train Acc (Clamped): 9.89%
+Epoch 1 | Batch 600 | Train Acc (Clamped): 9.81%
+Epoch 1 | Batch 700 | Train Acc (Clamped): 9.75%
+Epoch 1 | Batch 800 | Train Acc (Clamped): 9.85%
+Epoch 1 | Batch 900 | Train Acc (Clamped): 9.86%
+Switching label layer to Inference Mode (LIF)...
+Epoch 1 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 412.3s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 2 | Batch 0 | Train Acc (Clamped): 9.38%
+Epoch 2 | Batch 100 | Train Acc (Clamped): 9.64%
+Epoch 2 | Batch 200 | Train Acc (Clamped): 9.79%
+Epoch 2 | Batch 300 | Train Acc (Clamped): 9.72%
+Epoch 2 | Batch 400 | Train Acc (Clamped): 9.79%
+Epoch 2 | Batch 500 | Train Acc (Clamped): 9.81%
+Epoch 2 | Batch 600 | Train Acc (Clamped): 9.82%
+Epoch 2 | Batch 700 | Train Acc (Clamped): 9.89%
+Epoch 2 | Batch 800 | Train Acc (Clamped): 9.86%
+Epoch 2 | Batch 900 | Train Acc (Clamped): 9.85%
+Switching label layer to Inference Mode (LIF)...
+Epoch 2 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 413.0s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 3 | Batch 0 | Train Acc (Clamped): 14.06%
+Epoch 3 | Batch 100 | Train Acc (Clamped): 10.72%
+Epoch 3 | Batch 200 | Train Acc (Clamped): 9.98%
+Epoch 3 | Batch 300 | Train Acc (Clamped): 10.12%
+Epoch 3 | Batch 400 | Train Acc (Clamped): 10.21%
+Epoch 3 | Batch 500 | Train Acc (Clamped): 10.04%
+Epoch 3 | Batch 600 | Train Acc (Clamped): 9.95%
+Epoch 3 | Batch 700 | Train Acc (Clamped): 9.80%
+Epoch 3 | Batch 800 | Train Acc (Clamped): 9.86%
+Epoch 3 | Batch 900 | Train Acc (Clamped): 9.88%
+Switching label layer to Inference Mode (LIF)...
+Epoch 3 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 412.8s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 4 | Batch 0 | Train Acc (Clamped): 3.12%
+Epoch 4 | Batch 100 | Train Acc (Clamped): 9.67%
+Epoch 4 | Batch 200 | Train Acc (Clamped): 9.54%
+Epoch 4 | Batch 300 | Train Acc (Clamped): 9.68%
+Epoch 4 | Batch 400 | Train Acc (Clamped): 9.91%
+Epoch 4 | Batch 500 | Train Acc (Clamped): 9.87%
+Epoch 4 | Batch 600 | Train Acc (Clamped): 9.84%
+Epoch 4 | Batch 700 | Train Acc (Clamped): 9.82%
+Epoch 4 | Batch 800 | Train Acc (Clamped): 9.91%
+Epoch 4 | Batch 900 | Train Acc (Clamped): 9.87%
+Switching label layer to Inference Mode (LIF)...
+Epoch 4 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 412.1s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 5 | Batch 0 | Train Acc (Clamped): 6.25%
+Epoch 5 | Batch 100 | Train Acc (Clamped): 9.85%
+Epoch 5 | Batch 200 | Train Acc (Clamped): 9.79%
+Epoch 5 | Batch 300 | Train Acc (Clamped): 9.91%
+Epoch 5 | Batch 400 | Train Acc (Clamped): 9.84%
+Epoch 5 | Batch 500 | Train Acc (Clamped): 9.77%
+Epoch 5 | Batch 600 | Train Acc (Clamped): 9.69%
+Epoch 5 | Batch 700 | Train Acc (Clamped): 9.68%
+Epoch 5 | Batch 800 | Train Acc (Clamped): 9.76%
+Epoch 5 | Batch 900 | Train Acc (Clamped): 9.87%
+Switching label layer to Inference Mode (LIF)...
+Epoch 5 DONE | Train Acc: 9.88% | Test Acc: 9.81% | Time: 411.9s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 6 | Batch 0 | Train Acc (Clamped): 4.69%
+Epoch 6 | Batch 100 | Train Acc (Clamped): 9.45%
+Epoch 6 | Batch 200 | Train Acc (Clamped): 9.95%
+Epoch 6 | Batch 300 | Train Acc (Clamped): 9.95%
+Epoch 6 | Batch 400 | Train Acc (Clamped): 9.92%
+Epoch 6 | Batch 500 | Train Acc (Clamped): 9.89%
+Epoch 6 | Batch 600 | Train Acc (Clamped): 9.91%
+Epoch 6 | Batch 700 | Train Acc (Clamped): 10.03%
+Epoch 6 | Batch 800 | Train Acc (Clamped): 9.98%
+Epoch 6 | Batch 900 | Train Acc (Clamped): 9.89%
+Switching label layer to Inference Mode (LIF)...
+Epoch 6 DONE | Train Acc: 9.88% | Test Acc: 9.81% | Time: 411.9s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 7 | Batch 0 | Train Acc (Clamped): 17.19%
+Epoch 7 | Batch 100 | Train Acc (Clamped): 9.92%
+Epoch 7 | Batch 200 | Train Acc (Clamped): 9.86%
+Epoch 7 | Batch 300 | Train Acc (Clamped): 9.77%
+Epoch 7 | Batch 400 | Train Acc (Clamped): 9.79%
+Epoch 7 | Batch 500 | Train Acc (Clamped): 9.74%
+Epoch 7 | Batch 600 | Train Acc (Clamped): 9.84%
+Epoch 7 | Batch 700 | Train Acc (Clamped): 9.87%
+Epoch 7 | Batch 800 | Train Acc (Clamped): 9.89%
+Epoch 7 | Batch 900 | Train Acc (Clamped): 9.88%
+Switching label layer to Inference Mode (LIF)...
+Epoch 7 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 412.0s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 8 | Batch 0 | Train Acc (Clamped): 9.38%
+Epoch 8 | Batch 100 | Train Acc (Clamped): 9.72%
+Epoch 8 | Batch 200 | Train Acc (Clamped): 9.62%
+Epoch 8 | Batch 300 | Train Acc (Clamped): 9.52%
+Epoch 8 | Batch 400 | Train Acc (Clamped): 9.85%
+Epoch 8 | Batch 500 | Train Acc (Clamped): 9.96%
+Epoch 8 | Batch 600 | Train Acc (Clamped): 9.93%
+Epoch 8 | Batch 700 | Train Acc (Clamped): 9.85%
+Epoch 8 | Batch 800 | Train Acc (Clamped): 9.83%
+Epoch 8 | Batch 900 | Train Acc (Clamped): 9.85%
+Switching label layer to Inference Mode (LIF)...
+Epoch 8 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 411.8s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...
+Epoch 9 | Batch 0 | Train Acc (Clamped): 15.62%
+Epoch 9 | Batch 100 | Train Acc (Clamped): 9.93%
+Epoch 9 | Batch 200 | Train Acc (Clamped): 9.70%
+Epoch 9 | Batch 300 | Train Acc (Clamped): 9.71%
+Epoch 9 | Batch 400 | Train Acc (Clamped): 9.87%
+Epoch 9 | Batch 500 | Train Acc (Clamped): 9.78%
+Epoch 9 | Batch 600 | Train Acc (Clamped): 9.82%
+Epoch 9 | Batch 700 | Train Acc (Clamped): 9.85%
+Epoch 9 | Batch 800 | Train Acc (Clamped): 9.79%
+Epoch 9 | Batch 900 | Train Acc (Clamped): 9.88%
+Switching label layer to Inference Mode (LIF)...
+Epoch 9 DONE | Train Acc: 9.87% | Test Acc: 9.81% | Time: 412.0s | G-SynOps: 0.000
+Switching label layer back to Training Mode (Clamp)...

@@ -1,0 +1,110 @@
+DO Python file
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.0.2 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/bPC_SNN.py", line 3, in <module>
+    from torchvision import datasets, transforms
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/__init__.py", line 6, in <module>
+    from torchvision import datasets, io, models, ops, transforms, utils
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/__init__.py", line 17, in <module>
+    from . import detection, optical_flow, quantization, segmentation, video
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/detection/__init__.py", line 1, in <module>
+    from .faster_rcnn import *
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/detection/faster_rcnn.py", line 16, in <module>
+    from .anchor_utils import AnchorGenerator
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/detection/anchor_utils.py", line 10, in <module>
+    class AnchorGenerator(nn.Module):
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/detection/anchor_utils.py", line 63, in AnchorGenerator
+    device: torch.device = torch.device("cpu"),
+/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/models/detection/anchor_utils.py:63: UserWarning: Failed to initialize NumPy: _ARRAY_API not found (Triggered internally at ../torch/csrc/utils/tensor_numpy.cpp:84.)
+  device: torch.device = torch.device("cpu"),
+Downloading http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz
+Failed to download (trying next):
+HTTP Error 404: Not Found
+
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz to ./data/MNIST/raw/train-images-idx3-ubyte.gz
+  0%|          | 0/9912422 [00:00<?, ?it/s]  0%|          | 32768/9912422 [00:00<00:49, 198482.99it/s]  1%|          | 65536/9912422 [00:00<00:50, 193608.57it/s]  1%|▏         | 131072/9912422 [00:00<00:34, 282009.14it/s]  3%|▎         | 262144/9912422 [00:00<00:20, 475402.42it/s]  6%|▌         | 557056/9912422 [00:00<00:10, 929655.76it/s] 12%|█▏        | 1179648/9912422 [00:01<00:04, 1837093.51it/s] 19%|█▊        | 1835008/9912422 [00:01<00:04, 1873763.72it/s] 28%|██▊       | 2752512/9912422 [00:01<00:02, 3112662.76it/s] 40%|███▉      | 3932160/9912422 [00:01<00:01, 4226780.51it/s] 50%|█████     | 4980736/9912422 [00:01<00:01, 3696639.05it/s] 75%|███████▌  | 7438336/9912422 [00:02<00:00, 6326551.13it/s] 86%|████████▌ | 8519680/9912422 [00:02<00:00, 6329197.23it/s] 97%|█████████▋| 9601024/9912422 [00:02<00:00, 6338719.33it/s]100%|██████████| 9912422/9912422 [00:02<00:00, 3867094.33it/s]
+Extracting ./data/MNIST/raw/train-images-idx3-ubyte.gz to ./data/MNIST/raw
+
+Downloading http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz
+Failed to download (trying next):
+HTTP Error 404: Not Found
+
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz to ./data/MNIST/raw/train-labels-idx1-ubyte.gz
+  0%|          | 0/28881 [00:00<?, ?it/s]100%|██████████| 28881/28881 [00:00<00:00, 170898.16it/s]100%|██████████| 28881/28881 [00:00<00:00, 170676.15it/s]
+Extracting ./data/MNIST/raw/train-labels-idx1-ubyte.gz to ./data/MNIST/raw
+
+Downloading http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz
+Failed to download (trying next):
+HTTP Error 404: Not Found
+
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz to ./data/MNIST/raw/t10k-images-idx3-ubyte.gz
+  0%|          | 0/1648877 [00:00<?, ?it/s]  2%|▏         | 32768/1648877 [00:00<00:08, 198558.70it/s]  4%|▍         | 65536/1648877 [00:00<00:08, 197405.84it/s]  8%|▊         | 131072/1648877 [00:00<00:05, 289214.39it/s] 16%|█▌        | 262144/1648877 [00:00<00:02, 489115.64it/s] 34%|███▍      | 557056/1648877 [00:00<00:01, 957958.78it/s] 72%|███████▏  | 1179648/1648877 [00:00<00:00, 1916014.27it/s]100%|██████████| 1648877/1648877 [00:00<00:00, 1657485.50it/s]
+Extracting ./data/MNIST/raw/t10k-images-idx3-ubyte.gz to ./data/MNIST/raw
+
+Downloading http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz
+Failed to download (trying next):
+HTTP Error 404: Not Found
+
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz
+Downloading https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz to ./data/MNIST/raw/t10k-labels-idx1-ubyte.gz
+  0%|          | 0/4542 [00:00<?, ?it/s]100%|██████████| 4542/4542 [00:00<00:00, 2740688.93it/s]
+[I 2026-01-17 19:33:43,641] A new study created in memory with name: no-name-e30177a6-5d50-4066-b328-39ae7f8ca6f5
+[W 2026-01-17 19:33:45,667] Trial 0 failed with parameters: {'tau_m': 6.449834148760839, 'tau_j': 5.233491976822967, 'tau_tr': 17.206249450654948, 'thresh': 3.7281110641750184, 'kappa_j': 1.168511536157938, 'gamma_m': 0.9352731950787936, 'alpha_u': 0.009315797416372798, 'alpha_gen': 0.00018533027260952536} because of the following error: RuntimeError('Numpy is not available').
+Traceback (most recent call last):
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 205, in _run_trial
+    value_or_values = func(trial)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/bPC_SNN.py", line 264, in objective
+    for batch_idx, (imgs, lbls) in enumerate(TRAIN_LOADER):
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 633, in __next__
+    data = self._next_data()
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 677, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 51, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 51, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/datasets/mnist.py", line 142, in __getitem__
+    img = Image.fromarray(img.numpy(), mode="L")
+RuntimeError: Numpy is not available
+[W 2026-01-17 19:33:45,675] Trial 0 failed with value None.
+Extracting ./data/MNIST/raw/t10k-labels-idx1-ubyte.gz to ./data/MNIST/raw
+
+=== Starting Bayesian Optimization with Optuna ===
+Fixed Config: T_st=25ms, Max Freq=320.0Hz
+Traceback (most recent call last):
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/bPC_SNN.py", line 327, in <module>
+    study.optimize(objective, n_trials=50) # トライアル数は時間に応じて調整してください
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/study.py", line 490, in optimize
+    _optimize(
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 67, in _optimize
+    _optimize_sequential(
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 164, in _optimize_sequential
+    frozen_trial_id = _run_trial(study, func, catch)
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 262, in _run_trial
+    raise func_err
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 205, in _run_trial
+    value_or_values = func(trial)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/bPC_SNN.py", line 264, in objective
+    for batch_idx, (imgs, lbls) in enumerate(TRAIN_LOADER):
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 633, in __next__
+    data = self._next_data()
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 677, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 51, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 51, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torchvision/datasets/mnist.py", line 142, in __getitem__
+    img = Image.fromarray(img.numpy(), mode="L")
+RuntimeError: Numpy is not available

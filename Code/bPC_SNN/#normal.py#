@@ -278,9 +278,8 @@ class bPC_SNN(nn.Module):
         ST-LRA Update Rule
         """
         alpha_u = self.config['alpha_u']
-
-        with torch.no_grad():
-            for i in range(len(self.layers)):
+        
+        for i in range(len(self.layers)):
                 
                 # Vの更新 (Discriminative weights)
                 if i < len(self.layers) - 1:
