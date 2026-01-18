@@ -10,15 +10,15 @@ import os
 CONFIG = {
     'dt' : 1.0,
     'T_st' : 200.0, # データ提示時間
-    'T_r' : 1.0,
+    'T_r' : 1.0,    # 不応期
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
-    'tau_data' : 100,
+    'tau_data' : 60.0,
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m' : 1.0,
-    'alpha_u' : 0.001,   # 学習率
+    'alpha_u' : 0.055,   # 学習率
     'alpha_gen' : 1e-4,  # 予測誤差の重み
     'alpha_disc' : 1.0,
     'thresh': 0.4,
@@ -65,6 +65,7 @@ class bPC_SNNLayer(nn.Module):
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
+        self.refrac_timer = None # 【追加】不応期タイマー
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -73,28 +74,49 @@ class bPC_SNNLayer(nn.Module):
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
+        # 【追加】不応期タイマー初期化
+        self.refrac_timer = torch.zeros(batch_size, self.dim, device=device)
 
     def switch_label_mode(self):
         self.is_label_layer = not self.is_label_layer
 
     def update_state(self, total_input_current):
         # ラベル層もテスト時(Inference Mode)はupdate_stateで動かす必要があるため条件を調整
-        # ただし training_mode の制御は forward_dynamics 側で行う想定のため、
-        # ここでは is_data_layer 以外は更新するようにしておく
-        if not self.is_data_layer: 
+        if not (self.is_data_layer or self.is_label_layer): 
             dt = self.cfg['dt']
+            T_r = self.cfg['T_r']
             
-            # 電流ダイナミクス
+            # 電流ダイナミクス (不応期に関わらず入力は積分されるモデルとする)
             d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
             self.j = self.j + (dt / self.cfg['tau_j']) * d_j
             
+            # 【追加】不応期判定
+            is_refractory = (self.refrac_timer > 0)
+
             # 膜電位ダイナミクス
             d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-            self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+            v_next = self.v + (dt / self.cfg['tau_m']) * d_v
             
+            # 【修正】不応期中のニューロンは膜電位更新をスキップ (0に固定)
+            # ※ 前のステップでリセットされていれば0のまま
+            self.v = torch.where(is_refractory, self.v, v_next)
+            
+            # スパイク生成 (閾値超え かつ 不応期でない)
             spikes = (self.v > self.cfg['thresh']).float()
+            spikes = spikes * (1.0 - is_refractory.float()) # 念のためマスク
+            
             self.s = spikes
-            self.v = self.v * (1 - spikes) 
+            
+            # リセット
+            self.v = self.v * (1 - spikes)
+            
+            # 【追加】不応期タイマーの更新
+            # 1. 経過時間を引く
+            self.refrac_timer = torch.clamp(self.refrac_timer - dt, min=0)
+            # 2. スパイクしたニューロンのタイマーをセット
+            self.refrac_timer = torch.where(spikes > 0, torch.tensor(T_r, device=self.v.device), self.refrac_timer)
+
+            # トレース更新
             self.x = self.x - (1 / self.cfg['tau_tr']) * self.x + spikes
         
 
@@ -125,6 +147,7 @@ class bPC_SNN(nn.Module):
 
         self.total_synops = 0.0
         self.z_data = None # データ層のトレース用
+        self.z_label = None # ラベル層のトレース用
 
     def reset_state(self, batch_size, device):
         for layer in self.layers:
@@ -133,6 +156,9 @@ class bPC_SNN(nn.Module):
             if layer.is_data_layer:
                 # データ層用のトレース変数を初期化
                 self.z_data = torch.zeros(batch_size, layer.dim, device=device)
+            
+            if layer.is_label_layer:
+                self.z_label = torch.zeros(batch_size, layer.dim, device=device)
 
     def clip_weights(self, max_norm=20.0):
         with torch.no_grad():
@@ -154,7 +180,7 @@ class bPC_SNN(nn.Module):
                 total_input = 0
 
                 # 学習時は，データ層とラベル層を除いたところでLIFニューロンとして活動する
-                # ラベル層は教師信号で誤差計算するため、ここでの自発活動更新はスキップ（または入力0で更新）
+                # ラベル層は教師信号で誤差計算するため、ここでの自発活動更新はスキップ
                 if i > 0 and i < len(self.layers) - 1:
                     # 上からの予測/誤差フィードバック
                     if i < len(self.layers) - 1:
@@ -180,10 +206,6 @@ class bPC_SNN(nn.Module):
                 elif i < len(self.layers) - 1:
                     # Discriminative Error (Bottom-up Error)
                     if i == 1:
-                        # 第1層はデータ層(アナログトレース)からの入力を受けるため別途計算しても良いが
-                        # ここでは簡単のため x_data を直接使うか、layer[0]相当の何かを使う
-                        # 入力データ x_data はスパイクなので、z_data を使うのがベターだが
-                        # 元コードのロジックに従い x_data を使用
                         z_disc_data = torch.matmul(x_data, self.V[i-1].t())
                         layer.e_disc = alpha_disc * (layer.x - z_disc_data)
                     else:
@@ -203,10 +225,11 @@ class bPC_SNN(nn.Module):
                 
                 else:
                     # ラベル層 (Output)
+                    self.z_label += (-self.z_label / self.config['tau_data'] + y_target)
                     s_lower = self.layers[i-1].s
                     z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
-                    # 教師信号との誤差
-                    layer.e_disc = alpha_disc * (y_target - z_disc_pred)
+                    # 教師信号(Trace)との誤差
+                    layer.e_disc = alpha_disc * (self.z_label - z_disc_pred)
 
         # テスト時
         else:
@@ -231,14 +254,14 @@ class bPC_SNN(nn.Module):
             # 誤差計算
             for i, layer in enumerate(self.layers):
                 if i == 0:
-                    self.z_data += - self.z_data / self.config['tau_data'] + x_data
+                    self.z_data += (- self.z_data / self.config['tau_data'] + x_data)
                     s_upper = self.layers[i+1].s
                     z_gen_pred = torch.matmul(s_upper, self.W[i].t())
                     layer.e_gen = alpha_gen * (self.z_data - z_gen_pred)
 
                 elif i < len(self.layers):
                     if i == 1:
-                        z_disc_data = torch.matmul(x_data, self.V[i-1].t())
+                        z_disc_data = torch.matmul(self.z_data, self.V[i-1].t())
                         layer.e_disc = alpha_disc * (layer.x - z_disc_data)
                     else:
                         s_lower = self.layers[i-1].s
@@ -257,7 +280,6 @@ class bPC_SNN(nn.Module):
         alpha_u = self.config['alpha_u']
 
         with torch.no_grad():
-            # 【修正】ループ範囲を len(self.layers) まで拡張して最後の結合も更新対象にする
             for i in range(len(self.layers)):
                 
                 # Vの更新 (Discriminative weights)
@@ -275,7 +297,6 @@ class bPC_SNN(nn.Module):
                 if i > 0:
                     e_gen_lower = self.layers[i-1].e_gen
                     
-                    # 【修正】最上位のW更新には y_target を使う
                     if i == len(self.layers) - 1:
                         if y_target is not None:
                             grad_W = torch.matmul(e_gen_lower.t(), y_target)
@@ -315,19 +336,21 @@ def run_experiment(dataset_name='MNIST'):
     for epoch in range(CONFIG['epochs']):
         # --- Training ---
         model.train()
-        train_correct = 0
-        train_samples = 0
         epoch_start = time.time()
         model.total_synops = 0 
         
         for batch_idx, (imgs, lbls) in enumerate(train_l):
             imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
             
+            # One-hotターゲット
             targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
             targets.scatter_(1, lbls.view(-1, 1), 1)
             
             imgs_rate = torch.clamp(imgs, 0, 1)
             spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+            
+            # ターゲットをポアソンスパイクに変換
+            spike_targets = generate_poisson_spikes(targets, steps, CONFIG)
             
             model.reset_state(imgs.size(0), CONFIG['device'])
             
@@ -335,25 +358,17 @@ def run_experiment(dataset_name='MNIST'):
             
             for t in range(steps):
                 x_t = spike_in[t]
-                model.forward_dynamics(x_data=x_t, y_target=targets, training_mode=True)
+                # 時刻tのターゲットスパイク
+                y_t = spike_targets[t]
                 
-                # 【修正】引数を渡す
-                model.manual_weight_update(x_data=x_t, y_target=targets)
+                model.forward_dynamics(x_data=x_t, y_target=y_t, training_mode=True)
+                
+                model.manual_weight_update(x_data=x_t, y_target=y_t)
                 model.clip_weights(20.0)
-
-                # 最終層のスパイクを蓄積
-                sum_out_spikes += model.layers[-1].s
-                
-            _, pred = torch.max(sum_out_spikes, 1) # Training中はTargetに引っ張られるので参考値
-            train_correct += (pred == lbls).sum().item()
-            train_samples += lbls.size(0)
             
             if batch_idx % 100 == 0:
-                print(f"Epoch {epoch} | Batch {batch_idx} | Train Acc (Clamped): {100*train_correct/train_samples:.2f}%")
-
-        train_acc = 100 * train_correct / train_samples
-        epoch_synops = model.total_synops
-        
+                print(f"Epoch {epoch} | Batch {batch_idx}")
+    
         # --- Testing ---
         print("Switching label layer to Inference Mode (LIF)...")
         model.layers[-1].switch_label_mode()
@@ -373,10 +388,8 @@ def run_experiment(dataset_name='MNIST'):
             for t in range(steps):
                 x_t = spike_in[t]
                 with torch.no_grad():
-                    # y_target=None で推論モード
                     model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
                 
-                # 最終層のスパイクを蓄積
                 sum_out_spikes += model.layers[-1].s
             
             _, pred = torch.max(sum_out_spikes, 1)
@@ -386,7 +399,7 @@ def run_experiment(dataset_name='MNIST'):
         test_acc = 100 * test_correct / test_samples
         epoch_time = time.time() - epoch_start
         
-        print(f"Epoch {epoch} DONE | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s | G-SynOps: {epoch_synops/1e9:.3f}")
+        print(f"Epoch {epoch} DONE | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
         
         print("Switching label layer back to Training Mode (Clamp)...")
         model.layers[-1].switch_label_mode()
@@ -394,10 +407,8 @@ def run_experiment(dataset_name='MNIST'):
         logs.append({
             'dataset': dataset_name,
             'epoch': epoch,
-            'train_acc': train_acc,
             'test_acc': test_acc,
-            'time': epoch_time,
-            'synops': epoch_synops
+            'time': epoch_time
         })
         
         df = pd.DataFrame(logs)

@@ -6,54 +6,40 @@ import time
 import pandas as pd
 import os
 
-# --- ハイパーパラメータ設定 (Diehl & Cook 2015 の要素を追加) ---
+# --- ハイパーパラメータ設定 ---
 CONFIG = {
-    'dt': 1.0,          # 微小時間 (ms)
-    'T_r' : 1.0,         # 絶対不応期 (ms)
-    'T_st' : 200,        # データ提示時間 (ms) - 論文に合わせて長めに設定
-    'tau_m': 20.0,      # 時定数（膜電位） - 論文に合わせて長く設定 (積分効果向上)
+    'dt': 0.25,          # 微小時間
+    'T_r' : 1.0,         # 絶対不応期 (time units)
+    'T_st' : 200,        # データ提示時間
+    'tau_m': 20.0,       # 時定数（膜電位）
     'tau_j': 10.0,       # 時定数（入力電流）
     'tau_tr': 30.0,      # 時定数（ローパスフィルタ）
-    'tau_dt' : 100,      # 時定数（入力データ用）
-    'tau_theta': 1e4,    # 時定数（適応的閾値） - 非常にゆっくり減衰
-    'theta_plus': 0.05,  # 適応的閾値の増加分
-    'inhib_str': 1.5,    # 側抑制の強さ (Lateral Inhibition Strength)
-    
     'kappa_j': 0.25,     # 漏れ係数（入力電流）
     'gamma_m': 1.0,      # 漏れ係数（膜電位）
     'R_m': 1.0,          # 抵抗
-    'alpha_u': 0.001,    # 重み学習率 (抑制が入るため少し下げて調整)
-    'beta': 1.0,         # 誤差重み学習率
-    'thresh': 0.4,       # ベース発火閾値
-    'max_freq' : 63.75,  # 最大周波数 (Hz)
-    
-    # 再提示設定
-    'min_spikes': 5,     # 学習に必要な最小スパイク数
-    'gain_boost': 1.5,   # 再提示時のゲイン倍率 (Hz増加の代わりに入力倍率として実装)
-    'max_attempts': 3,   # 最大再提示回数
-    
+    'alpha_u': 0.055,   # 重み学習率
+    'beta': 1.0,        # 誤差重み学習率
+    'thresh': 0.4,       # 発火閾値
+    'max_freq' : 63.75, # 最大周波数
     'batch_size': 64,
-    'target_acc': 95.0,
-    'max_epochs': 10,
+    'target_acc': 95.0,  # 目標テスト精度 (%) (target_accモードで使用)
+    'max_epochs': 10,   # 最大エポック数 (fixed_epochsモードではこの回数実行)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'save_dir': './results/SpNCN_DiehlCook'
+    'save_dir': './results/SpNCN_CostMeasured'
 }
 
-# --- ポアソンエンコーディング関数 (ゲイン調整対応) ---
-def generate_poisson_spikes(data, num_steps, config, gain=1.0):
+# --- ポアソンエンコーディング関数 ---
+def generate_poisson_spikes(data, num_steps, config):
     """
     入力データ(0~1)を受け取り、ポアソンスパイク列(Time, Batch, Dim)を生成する
-    gain: 再提示時に強度を上げるための係数
     """
-    device = data.device
     batch_size, dim = data.shape
     
     dt = config['dt']
     max_freq = config['max_freq']
     
-    # 確率 p = (Data * Gain) * freq(Hz) * dt(ms) / 1000
-    # Gainをかけることで擬似的に輝度(周波数)を上げる
-    firing_probs = data * gain * max_freq * (dt / 1000.0)
+    # 確率 p = freq(Hz) * dt(ms) / 1000
+    firing_probs = data * max_freq * (dt / 1000.0)
     firing_probs = torch.clamp(firing_probs, 0.0, 1.0)
     
     firing_probs_expanded = firing_probs.unsqueeze(0).expand(num_steps, batch_size, dim)
@@ -64,37 +50,12 @@ def generate_poisson_spikes(data, num_steps, config, gain=1.0):
 # 結果保存用ディレクトリ作成
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
 
-# --- エネルギー定数 ---
-E_MUL = 3.7e-12  # 3.7 pJ
-E_ADD = 0.9e-12  # 0.9 pJ
-
-class CostMonitor:
-    def __init__(self):
-        self.reset()
-    def reset(self):
-        self.total_synops = 0.0
-        self.total_dense_muls = 0.0
-        self.total_dense_adds = 0.0
-        self.start_time = time.time()
-    def add_synops(self, count):
-        self.total_synops += count
-    def add_dense_ops(self, muls, adds):
-        self.total_dense_muls += muls
-        self.total_dense_adds += adds
-    def get_energy(self):
-        energy_synops = self.total_synops * E_ADD
-        energy_dense = (self.total_dense_muls * E_MUL) + (self.total_dense_adds * E_ADD)
-        return energy_synops + energy_dense
-    def get_time(self):
-        return time.time() - self.start_time
-
 class SpNCNLayer(nn.Module):
-    def __init__(self, idx, output_dim, config, monitor, is_data_layer=False):
+    def __init__(self, idx, output_dim, config, is_data_layer=False):
         super().__init__()
         self.idx = idx
         self.dim = output_dim
         self.cfg = config
-        self.monitor = monitor 
         self.is_data_layer = is_data_layer
         
     def init_state(self, batch_size, device):
@@ -103,71 +64,57 @@ class SpNCNLayer(nn.Module):
         self.s = torch.zeros(batch_size, self.dim, device=device)
         self.x = torch.zeros(batch_size, self.dim, device=device)
         self.e = torch.zeros(batch_size, self.dim, device=device)
+        # 不応期カウンタの初期化 (0なら活動可能)
         self.ref_count = torch.zeros(batch_size, self.dim, device=device)
-        
-        # [New] 適応的閾値 (Homeostasis)
-        # 初期値は0。発火しすぎるとプラスになり、発火しにくくなる。
-        self.theta = torch.zeros(batch_size, self.dim, device=device)
 
-    def update_state(self, total_input_current, lateral_inhibition=None):
+    def update_state(self, total_input_current):
         """
-        lateral_inhibition: Tensor (batch, dim) 
-                            正の値を受け取り、電流から減算する
+        ニューロン内部状態の更新 (Dense Operations)
+        絶対不応期を実装
         """
         dt = self.cfg['dt']
-        batch_size = self.j.size(0)
-        n_neurons = batch_size * self.dim
+        T_r = self.cfg['T_r']
 
-        # 1. 不応期更新
+        # --- 1. 不応期タイマーの更新 ---
+        # カウンタを時間経過分減らす (最小値は0)
         self.ref_count = (self.ref_count - dt).clamp(min=0)
+        
+        # 活動可能なニューロンのマスク (ref_count == 0 なら 1.0, それ以外は 0.0)
         is_active = (self.ref_count <= 0).float()
 
-        # 2. 電流積分 (LIF)
-        # 側抑制 (Lateral Inhibition) の適用
-        effective_input = total_input_current
-        if lateral_inhibition is not None:
-            effective_input = effective_input - lateral_inhibition
-            # コスト: 引き算 (Add)
-            self.monitor.add_dense_ops(muls=0, adds=n_neurons)
-
-        d_j = (-self.cfg['kappa_j'] * self.j + effective_input)
+        # --- 2. LIF Dynamics Calculation Cost ---
+        # 入力電流 j の更新 (不応期に関わらず積分を行うのが一般的)
+        # d_j = (-kappa_j * j + total_input_current)
+        d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
         self.j = self.j + (dt / self.cfg['tau_j']) * d_j
         
+        # 膜電位 v の更新
+        # d_v = (-gamma_m * v + R_m * j)
         d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
         v_next = self.v + (dt / self.cfg['tau_m']) * d_v
         
-        # 3. 適応的閾値の減衰 (Theta Decay)
-        # theta = theta - theta/tau_theta
-        self.theta = self.theta - (dt / self.cfg['tau_theta']) * self.theta
-        
-        self.v = is_active * v_next
-        
-        # コスト: LIF + Theta Decay
-        # Theta decay needs 1 mul, 1 sub per neuron
-        self.monitor.add_dense_ops(muls=5 * n_neurons + n_neurons, adds=4 * n_neurons + n_neurons)
+        # 不応期中のニューロンは膜電位をリセット値(0)に固定、それ以外は更新
+        self.v = is_active * v_next # + (1 - is_active) * 0.0
 
-        # 4. Spike Generation (Adaptive Threshold)
-        # 実際の閾値 = ベース閾値 + theta
-        effective_thresh = self.cfg['thresh'] + self.theta
-        spikes = (self.v > effective_thresh).float()
+        # --- 3. Spike Generation ---
+        # 閾値を超え、かつ不応期でない(activeな)ニューロンのみ発火
+        spikes = (self.v > self.cfg['thresh']).float()
         self.s = spikes
         
-        # Reset & Refractory
+        # Reset: 発火したニューロンの膜電位をリセット (v = 0)
         self.v = self.v * (1 - spikes)
-        self.ref_count = torch.where(spikes.bool(), torch.tensor(self.cfg['T_r'], device=self.v.device), self.ref_count)
         
-        # [New] Theta Update (Increase on spike)
-        # スパイクしたニューロンの閾値を上げる
-        self.theta = self.theta + spikes * self.cfg['theta_plus']
+        # 不応期タイマーの設定: 発火したニューロンの ref_count を T_r に設定
+        # spikeが発生した箇所のref_countをT_rで上書き
+        self.ref_count = torch.where(spikes.bool(), torch.tensor(T_r, device=self.v.device), self.ref_count)
         
-        self.monitor.add_dense_ops(muls=1 * n_neurons, adds=2 * n_neurons) # thresh calc + update
-
-        # 5. Trace Update
+        # --- 4. Trace Update ---
         if self.is_data_layer:
-            self.x = self.x - self.x / self.cfg['tau_dt'] + spikes
+            self.x = spikes
         else:
+            # x = x - x/tau + spikes
             self.x = self.x - self.x / self.cfg['tau_tr'] + spikes
-            self.monitor.add_dense_ops(muls=1 * n_neurons, adds=2 * n_neurons)
+        
 
 class SpNCN(nn.Module):
     def __init__(self, hidden_sizes, input_size, label_size=None, config=None, monitor=None):
@@ -176,58 +123,47 @@ class SpNCN(nn.Module):
         self.monitor = monitor
         self.layers = nn.ModuleList()
         
-        self.input_layer = SpNCNLayer(idx='input', output_dim=input_size, config=config, monitor=monitor, is_data_layer=True)
+        # --- 1. 入力層 (Layer 0) ---
+        self.input_layer = SpNCNLayer(idx='input', output_dim=input_size, config=config, is_data_layer=True)
         
+        # --- 2. ラベル層 (Layer Label) ---
         self.label_size = label_size
         if label_size is not None:
-            self.label_layer = SpNCNLayer(idx='label', output_dim=label_size, config=config, monitor=monitor, is_data_layer=True)
+            self.label_layer = SpNCNLayer(idx='label', output_dim=label_size, config=config, is_data_layer=True)
         else:
             self.label_layer = None
             
+        # --- 3. 隠れ層 (Hidden Layers) ---
         self.hidden_layers = nn.ModuleList()
         for i, size in enumerate(hidden_sizes):
-            self.hidden_layers.append(SpNCNLayer(idx=i, output_dim=size, config=config, monitor=monitor, is_data_layer=False))
+            self.hidden_layers.append(SpNCNLayer(idx=i, output_dim=size, config=config, is_data_layer=False))
             
+        # --- 重み定義 ---
         self.W = nn.ParameterList() 
         self.E = nn.ParameterList() 
         
-        # self.z_data はここで定義すると self.input_layer.x が未定義のためエラーになります。
-        # reset_state で定義します。
-        
+        # (A) Input <-> Hidden[0]
         h0_dim = hidden_sizes[0]
         self.W_x = nn.Parameter(torch.randn(input_size, h0_dim) * 0.05) 
         self.E_x = nn.Parameter(torch.randn(h0_dim, input_size) * 0.05) 
         
+        # (B) Label <- Hidden[0]
         if self.label_layer is not None:
             self.W_y = nn.Parameter(torch.randn(label_size, h0_dim) * 0.05) 
             
+        # (C) Hidden[i] <-> Hidden[i+1]
         for i in range(len(hidden_sizes) - 1):
             dim_lower = hidden_sizes[i]
             dim_upper = hidden_sizes[i+1]
             self.W.append(nn.Parameter(torch.randn(dim_lower, dim_upper) * 0.05))
             self.E.append(nn.Parameter(torch.randn(dim_upper, dim_lower) * 0.05))
 
-    def reset_state(self, batch_size, device, reset_theta=False):
-        """
-        reset_theta: Trueなら適応的閾値もリセット（エポックの最初など）。
-                     再提示(Re-presentation)のときはFalseにして、閾値上昇を維持する場合と、
-                     リセットする場合があるが、Diehl&Cookでは閾値は維持したまま画像を再提示する学習に近い。
-                     ここではニューロン状態(v, j)はリセットするが、学習された構造やthetaの扱いは文脈による。
-                     今回は「入力再提示」なので、v, j はリセットし、thetaは維持するのが一般的（ホメオスタシスの継続）。
-        """
+    def reset_state(self, batch_size, device):
         self.input_layer.init_state(batch_size, device)
-        
-        # [修正] ここで z_data を初期化 (Batch, Input_Dim)
-        self.z_data = torch.zeros(batch_size, self.input_layer.dim, device=device)
-
         if self.label_layer is not None:
             self.label_layer.init_state(batch_size, device)
         for layer in self.hidden_layers:
-            # thetaを保持するために個別にリセット処理
-            old_theta = layer.theta if hasattr(layer, 'theta') else None
             layer.init_state(batch_size, device)
-            if not reset_theta and old_theta is not None:
-                layer.theta = old_theta # 閾値履歴を復元
 
     def clip_weights(self, max_norm=20.0):
         with torch.no_grad():
@@ -244,53 +180,47 @@ class SpNCN(nn.Module):
         mask = norms > max_norm
         w.data = torch.where(mask, w * (max_norm / (norms + 1e-8)), w)
 
-    def forward_dynamics(self, x_data, y_target=None, training_mode=True):
+    def forward_dynamics(self, x_data, y_target=None):
+        """
+        SpNCN Algorithm 1 (With Cost Monitoring)
+        """
         # === 1. Update Phase ===
+        # (A) Input & Label Layers
         s_h0 = self.hidden_layers[0].s
+        
+        # SynOps: s_h0 (Spikes) @ W_x
+        # Cost: Active Spikes * Fan_out (Input Dim)
         z_pred_x = s_h0 @ self.W_x.t()
-        if training_mode: self.monitor.add_synops(s_h0.sum().item() * self.input_layer.dim)
-        self.input_layer.update_state(z_pred_x) # Input layer has no inhibition
+        self.input_layer.update_state(z_pred_x)
         
         if self.label_layer is not None:
             z_pred_y = s_h0 @ self.W_y.t()
-            if training_mode: self.monitor.add_synops(s_h0.sum().item() * self.label_layer.dim)
             self.label_layer.update_state(z_pred_y)
 
-        # Hidden Layers Update
+        # (B) Hidden Layers
         for i, layer in enumerate(self.hidden_layers):
-            total_input = (-layer.e) 
+            total_input = 0
             
-            # Feedback calculation
+            # Local Error (-layer.e) is element-wise simple sub/add
+            total_input += (-layer.e) 
+            
             if i == 0:
+                # Feedback: input_layer.e @ E_x.t()
+                # e is (-1, 0, 1). This is a Signed SynOp.
+                # Cost: Non-zero Errors * Fan_out (Hidden Dim)
                 feedback = self.input_layer.e @ self.E_x.t()
-                if training_mode:
-                    n_errors = (self.input_layer.e.abs() > 0.01).sum().item()
-                    self.monitor.add_synops(n_errors * layer.dim)
+                total_input += feedback
             else:
                 e_lower = self.hidden_layers[i-1].e
                 feedback = e_lower @ self.E[i-1].t()
-                if training_mode:
-                    n_errors = (e_lower.abs() > 0.01).sum().item()
-                    self.monitor.add_synops(n_errors * layer.dim)
-            
-            total_input += feedback
-            
-            # [New] Calculate Lateral Inhibition
-            # 簡略化: 全結合抑制 (自分以外)
-            # inhib = (sum(spikes) - my_spike) * strength
-            #       = sum(spikes) * strength - my_spike * strength
-            total_spikes_in_layer = layer.s.sum(dim=1, keepdim=True) # (Batch, 1)
-            lateral_signal = (total_spikes_in_layer - layer.s) * self.config['inhib_str']
-            
-            # コスト: Sum (N adds) + Sub/Mul (2N ops)
-            if training_mode:
-                self.monitor.add_dense_ops(muls=layer.dim * layer.j.size(0), adds=layer.dim * layer.j.size(0))
-
-            layer.update_state(total_input, lateral_inhibition=lateral_signal)
+                total_input += feedback
+                
+            layer.update_state(total_input)
 
         # === 2. Prediction & Error Phase ===
-        self.z_data += - self.z_data / self.config['tau_dt'] + x_data
-        self.input_layer.e = self.z_data - self.input_layer.x
+        # e = x - s (Sparse/Element-wise ops)
+        self.input_layer.e = x_data - self.input_layer.x
+        
         if self.label_layer is not None:
             if y_target is not None:
                 self.label_layer.e = y_target - self.label_layer.s
@@ -300,44 +230,49 @@ class SpNCN(nn.Module):
         for i, layer in enumerate(self.hidden_layers):
             if i < len(self.hidden_layers) - 1:
                 s_upper = self.hidden_layers[i+1].s
-                z_pred = s_upper @ self.W[i].t()
-                if training_mode: self.monitor.add_synops(s_upper.sum().item() * layer.dim)
+                z_pred = s_upper @ self.W[i].t()    
                 layer.e = layer.x - z_pred
             else:
                 layer.e = torch.zeros_like(layer.x)
 
     def manual_weight_update(self):
-        # 変更なし（前述のコードと同じ）
+        """
+        重み更新 (Dense MACs + Sparse Updates)
+        """
         lr = self.config['alpha_u']
         beta = self.config['beta']
+        
         with torch.no_grad():
             s_h0 = self.hidden_layers[0].s
             e_x = self.input_layer.e
-            batch_size = s_h0.size(0)
-            n_macs_wx = (batch_size * self.input_layer.dim * self.hidden_layers[0].dim) + \
-                        (self.input_layer.dim * self.hidden_layers[0].dim)
-            self.monitor.add_dense_ops(muls=n_macs_wx, adds=n_macs_wx)
+            
             self.W_x += lr * (e_x.t() @ s_h0)
             self.E_x += lr * beta * (s_h0.t() @ e_x)
+            
             if self.label_layer is not None:
                 e_y = self.label_layer.e
-                n_macs_wy = (batch_size * self.label_layer.dim * self.hidden_layers[0].dim) + \
-                            (self.label_layer.dim * self.hidden_layers[0].dim)
-                self.monitor.add_dense_ops(muls=n_macs_wy, adds=n_macs_wy)
                 self.W_y += lr * (e_y.t() @ s_h0)
+                
             for i in range(len(self.hidden_layers) - 1):
                 s_upper = self.hidden_layers[i+1].s
                 e_lower = self.hidden_layers[i].e
-                dim_lower = self.hidden_layers[i].dim
-                dim_upper = self.hidden_layers[i+1].dim
-                n_macs = (batch_size * dim_lower * dim_upper) + (dim_lower * dim_upper)
-                self.monitor.add_dense_ops(muls=n_macs, adds=n_macs)
+
                 self.W[i] += lr * (e_lower.t() @ s_upper)
                 self.E[i] += lr * beta * (s_upper.t() @ e_lower)
 
 def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
-    print(f"\n=== Running SpNCN with Diehl&Cook Mechanisms ===")
+    """
+    mode: 'target_acc' -> target_accに到達するまで学習 (max_epochs上限)
+          'fixed_epochs' -> max_epochsまで指定回数学習 (target_accは無視)
+    """
+    print(f"\n=== Running SpNCN Cost Measurement on {dataset_name} ===")
+    print(f"Mode: {mode}")
+    if mode == 'target_acc':
+        print(f"Goal: Reach Test Accuracy >= {CONFIG['target_acc']}%")
+    else:
+        print(f"Goal: Run for {CONFIG['max_epochs']} epochs")
     
+    # データの準備
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Lambda(lambda x: torch.flatten(x))
@@ -347,19 +282,18 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
         train_d = datasets.MNIST('./data', train=True, download=True, transform=transform)
         test_d = datasets.MNIST('./data', train=False, download=True, transform=transform)
     else:
-        raise ValueError("Dataset not supported")
+        raise ValueError("Dataset not supported in this script")
 
+    # DataLoader
     train_l = DataLoader(train_d, batch_size=CONFIG['batch_size'], shuffle=True, drop_last=True)
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
-    monitor = CostMonitor()
-    
+    # モデル構築
     model = SpNCN(
-        hidden_sizes=[500,500], # 実験のため1層に簡略化
+        hidden_sizes=[500, 500], 
         input_size=784, 
         label_size=10, 
-        config=CONFIG,
-        monitor=monitor
+        config=CONFIG
     ).to(CONFIG['device'])
     
     logs = []
@@ -367,71 +301,46 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
     max_test_acc = 0.0
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
     
+    # ループ条件を max_epochs に統一し、内部で mode による分岐を行う
     while epoch < CONFIG['max_epochs']:
         # --- Training ---
         model.train()
+        epoch_start = time.time()
         train_correct = 0
         train_samples = 0
-        re_presentations = 0 # 再提示回数カウンタ
         
         for batch_idx, (imgs, lbls) in enumerate(train_l):
             imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+            
             targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
             targets.scatter_(1, lbls.view(-1, 1), 1)
+            
             imgs_rate = torch.clamp(imgs, 0, 1)
-
-            # [New] 再提示ループ (Re-presentation Loop)
-            # バッチ内のニューロン活動が十分かチェックし、不足ならゲインを上げてやり直す
-            current_gain = 1.0
-            attempt = 0
+            # CONFIG['num_steps'] does not exist in CONFIG. Using 'steps' calculated from T_st/dt.
+            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
             
-            while attempt < CONFIG['max_attempts']:
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG, gain=current_gain)
-                
-                # 状態リセット (Thetaは維持)
-                model.reset_state(imgs.size(0), CONFIG['device'], reset_theta=False)
-                out_spikes = 0
-                
-                # スパイク数監視用のテンソル
-                # shape: (Batch, HiddenDim)
-                hidden_spikes_count = torch.zeros(imgs.size(0), model.hidden_layers[0].dim, device=CONFIG['device'])
-                
-                # 時間発展
-                for t in range(steps):
-                    x_t = spike_in[t]
-                    model.forward_dynamics(x_data=x_t, y_target=targets, training_mode=True)
-                    model.manual_weight_update()
-                    model.clip_weights(20.0)
-                    
-                    out_spikes += model.label_layer.s
-                    hidden_spikes_count += model.hidden_layers[0].s
-                
-                # チェック: バッチ内の各サンプルについて、少なくとも min_spikes 発火したか？
-                # Diehl論文では「5スパイク未満なら」再提示
-                # ここでは簡易化のため、バッチ平均ではなく「バッチ内の誰かが発火不足なら全体やり直し」
-                # あるいは「発火不足のサンプルだけ」やり直すのが理想だが、バッチ処理だと難しい。
-                # ここでは、「隠れ層全体での平均発火が著しく低い場合」に再提示を行うロジックにします。
-                
-                avg_spikes = hidden_spikes_count.mean().item() # ニューロン1個あたりの平均スパイク数
-                
-                if avg_spikes >= CONFIG['min_spikes']:
-                    break # 十分発火したので終了
-                
-                # 発火不足 -> ゲインを上げて再トライ
-                current_gain *= CONFIG['gain_boost']
-                attempt += 1
-                re_presentations += 1
+            model.reset_state(imgs.size(0), CONFIG['device'])
+            out_spikes = 0
             
+            for t in range(steps):
+                x_t = spike_in[t]
+                # 学習モード
+                model.forward_dynamics(x_data=x_t, y_target=targets)
+                model.manual_weight_update()
+                model.clip_weights(20.0)
+                out_spikes += model.label_layer.s
+                
             _, pred = torch.max(out_spikes, 1)
             train_correct += (pred == lbls).sum().item()
             train_samples += lbls.size(0)
 
-            print(f"\rEpoch {epoch+1} [{batch_idx+1}/{len(train_l)}] | Train Acc: {100 * train_correct / train_samples:.2f}% | Re-tries: {re_presentations}", end="")
+            # バッチごとの進捗表示
+            print(f"\rEpoch {epoch+1} [{batch_idx+1}/{len(train_l)}] | Running Train Acc: {100 * train_correct / train_samples:.2f}%", end="")
         
-        print()
+        print() # エポック終了後に改行
         train_acc = 100 * train_correct / train_samples
         
-        # --- Testing ---
+        # --- Testing (Every Epoch) ---
         model.eval()
         test_correct = 0
         test_samples = 0
@@ -439,15 +348,16 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
         for imgs, lbls in test_l:
             imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
             imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG) # テスト時はゲイン1.0固定
+            spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
             
-            model.reset_state(imgs.size(0), CONFIG['device'], reset_theta=False) # テスト時もTheta履歴は使う
+            model.reset_state(imgs.size(0), CONFIG['device'])
             out_spikes = 0
             
             for t in range(steps):
                 x_t = spike_in[t]
                 with torch.no_grad():
-                    model.forward_dynamics(x_data=x_t, y_target=None, training_mode=True)
+                    # テスト中のSynOpsもコストとして計上
+                    model.forward_dynamics(x_data=x_t, y_target=None)
                 out_spikes += model.label_layer.s
             
             _, pred = torch.max(out_spikes, 1)
@@ -456,18 +366,36 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
             
         test_acc = 100 * test_correct / test_samples
         max_test_acc = max(max_test_acc, test_acc)
-        
-        current_energy = monitor.get_energy()
-        print(f"Epoch {epoch+1} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
-        print(f"  Energy: {current_energy:.2e}J")
-        
-        logs.append({'epoch': epoch+1, 'train_acc': train_acc, 'test_acc': test_acc, 'energy': current_energy})
-        epoch += 1
+        epoch_time = time.time() - epoch_start
 
+        print(f"Epoch {epoch+1} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.2f}%")
+        
+        logs.append({
+            'epoch': epoch + 1,
+            'train_acc': train_acc,
+            'test_acc': test_acc
+        })
+        
+        epoch += 1
+        
+        # Target Accuracy Modeの場合の早期終了判定
+        if mode == 'target_acc' and max_test_acc >= CONFIG['target_acc']:
+            print(f"\nTarget Accuracy {CONFIG['target_acc']}% Reached at Epoch {epoch}.")
+            break
+
+    # 最終結果保存
     df = pd.DataFrame(logs)
-    csv_path = f"{CONFIG['save_dir']}/log_diehl_cook.csv"
+    csv_path = f"{CONFIG['save_dir']}/cost_log_{dataset_name}_{mode}.csv"
     df.to_csv(csv_path, index=False)
-    print("Done.")
+    
+    print(f"\nExperiment Finished.")
+    print(f"Total Epochs: {epoch}")
+    print(f"Log saved to {csv_path}")
 
 if __name__ == "__main__":
+    # モードを選択して実行
+    # mode='target_acc': 精度到達まで
+    # mode='fixed_epochs': CONFIG['max_epochs']回まで
+    
+    # ユーザーリクエスト: 指定したエポック数学習させてテストをする実験
     run_experiment('MNIST', mode='fixed_epochs')
