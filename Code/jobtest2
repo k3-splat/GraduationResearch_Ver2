@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH -p defq
+#SBATCH -J JOBTEST
+#SBATCH -o Compare_model/results/SpNCN_HP_result.%J
+#SBATCH --gres=gpu:1g.10gb:1
+
+echo "DO Python file"
+python Compare_model/SpNCN.py

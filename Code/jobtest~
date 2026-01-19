@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH -p defq
+#SBATCH -J JOBTEST
+#SBATCH -o bPC_SNN/result/HP_result.%J
+#SBATCH --gres=gpu:1g.10gb:1
+
+echo "DO Python file"
+python bPC_SNN/bPC_SNN.py

@@ -289,7 +289,7 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
     
     # モデル構築
     model = SpNCN(
-        hidden_sizes=[500, 500], 
+        hidden_sizes=[3000, 3000, 3000], 
         input_size=784, 
         label_size=10, 
         config=CONFIG

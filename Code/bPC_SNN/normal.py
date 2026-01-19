@@ -325,7 +325,7 @@ def run_experiment(dataset_name='MNIST'):
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
-    layer_sizes = [784, 500, 500, 10]
+    layer_sizes = [784, 3000, 3000, 3000, 10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
@@ -386,8 +386,7 @@ def run_experiment(dataset_name='MNIST'):
                 
                 for t in range(steps):
                     x_t = spike_in[t]
-                    with torch.no_grad():
-                        model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
+                    model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
                     
                     sum_out_spikes += model.layers[-1].s
                 
