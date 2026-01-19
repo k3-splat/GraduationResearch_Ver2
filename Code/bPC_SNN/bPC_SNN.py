@@ -3,6 +3,7 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 import time
+from snntorch import spikegen
 import pandas as pd
 import os
 import optuna
@@ -58,7 +59,7 @@ class bPC_SNNLayer(nn.Module):
         self.s = None
         self.x = None # Trace
         self.j = None # Input Current State
-        self.ref_count = None # 不応期カウンタ
+        # self.ref_count = None # 不応期カウンタ
         
         self.e_gen = None
         self.e_disc = None
@@ -84,7 +85,7 @@ class bPC_SNNLayer(nn.Module):
             # 隠れ層: LIF Dynamics
             dt = self.cfg['dt']
             
-            is_refractory = (self.ref_count > 0)
+            # is_refractory = (self.ref_count > 0)
 
             # 電流ダイナミクス
             d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
@@ -95,18 +96,18 @@ class bPC_SNNLayer(nn.Module):
             self.v = self.v + (dt / self.cfg['tau_m']) * d_v
             
             # 不応期リセット
-            self.v = torch.where(is_refractory, torch.zeros_like(self.v), self.v)
+            # self.v = torch.where(is_refractory, torch.zeros_like(self.v), self.v)
             
             # 発火判定
             spikes = (self.v > self.cfg['thresh']).float()
-            spikes = torch.where(is_refractory, torch.zeros_like(spikes), spikes)
+            # spikes = torch.where(is_refractory, torch.zeros_like(spikes), spikes)
             self.s = spikes
             
             # 発火後リセット & 不応期設定
             self.v = self.v * (1 - spikes)
-            ref_steps = int(self.cfg['T_r'] / dt)
-            self.ref_count = torch.where(spikes > 0, torch.tensor(float(ref_steps), device=self.ref_count.device), self.ref_count)
-            self.ref_count = torch.clamp(self.ref_count - 1, min=0)
+            # ref_steps = int(self.cfg['T_r'] / dt)
+            # self.ref_count = torch.where(spikes > 0, torch.tensor(float(ref_steps), device=self.ref_count.device), self.ref_count)
+            # self.ref_count = torch.clamp(self.ref_count - 1, min=0)
 
         # Trace Update
         self.x = self.x - (1 / self.cfg['tau_tr']) * self.x + self.s

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from snntorch import spikegen
 import time
 import pandas as pd
 import os
@@ -10,23 +11,25 @@ import os
 CONFIG = {
     'dt': 0.25,          # 微小時間
     'T_r' : 1.0,         # 絶対不応期 (time units)
-    'T_st' : 200,        # データ提示時間
+    'T_st' : 25,        # データ提示時間
     'tau_m': 20.0,       # 時定数（膜電位）
     'tau_j': 10.0,       # 時定数（入力電流）
     'tau_tr': 30.0,      # 時定数（ローパスフィルタ）
     'kappa_j': 0.25,     # 漏れ係数（入力電流）
     'gamma_m': 1.0,      # 漏れ係数（膜電位）
     'R_m': 1.0,          # 抵抗
-    'alpha_u': 0.055,   # 重み学習率
+    'alpha_u': 0.0005,   # 重み学習率
     'beta': 1.0,        # 誤差重み学習率
     'thresh': 0.4,       # 発火閾値
-    'max_freq' : 63.75, # 最大周波数
+    'max_freq' : 382.5, # 最大周波数
     'batch_size': 64,
     'target_acc': 95.0,  # 目標テスト精度 (%) (target_accモードで使用)
     'max_epochs': 10,   # 最大エポック数 (fixed_epochsモードではこの回数実行)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/SpNCN_CostMeasured'
 }
+
+# 不応期とポアソンエンコーディングが良くなかった->不応期は排除，ポアソンエンコーディングはspikegen.rateに変更
 
 # --- ポアソンエンコーディング関数 ---
 def generate_poisson_spikes(data, num_steps, config):
@@ -113,8 +116,27 @@ class SpNCNLayer(nn.Module):
             self.x = spikes
         else:
             # x = x - x/tau + spikes
-            self.x = self.x - self.x / self.cfg['tau_tr'] + spikes
+            self.x = self.x - dt / self.cfg['tau_tr'] * self.x + spikes
+
+        '''
+        dt = self.cfg['dt']
         
+        # LIF Dynamics
+        d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
+        self.j = self.j + (dt / self.cfg['tau_j']) * d_j
+        
+        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
+        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+        
+        spikes = (self.v > self.cfg['thresh']).float()
+        self.s = spikes
+        self.v = self.v * (1 - spikes) 
+        
+        if self.is_data_layer:
+            self.x = spikes
+        else:
+            self.x = self.x + (1 / self.cfg['tau_tr']) * (-self.x) + spikes
+        '''
 
 class SpNCN(nn.Module):
     def __init__(self, hidden_sizes, input_size, label_size=None, config=None, monitor=None):
@@ -317,7 +339,7 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
                 # CONFIG['num_steps'] does not exist in CONFIG. Using 'steps' calculated from T_st/dt.
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate, steps)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 out_spikes = 0
@@ -348,7 +370,7 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate, steps)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 out_spikes = 0
@@ -384,7 +406,7 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
 
     # 最終結果保存
     df = pd.DataFrame(logs)
-    csv_path = f"{CONFIG['save_dir']}/cost_log_{dataset_name}_{mode}.csv"
+    csv_path = f"{CONFIG['save_dir']}/cost_log_{dataset_name}_{mode}_a.csv"
     df.to_csv(csv_path, index=False)
     
     print(f"\nExperiment Finished.")

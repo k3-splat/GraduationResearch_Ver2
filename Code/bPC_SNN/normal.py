@@ -2,23 +2,23 @@ import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from snntorch import spikegen
 import time
 import pandas as pd
 import os
 
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
-    'dt' : 1.0,
+    'dt' : 0.25,
     'T_st' : 200.0, # データ提示時間
-    'T_r' : 1.0,    # 不応期
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
-    'tau_data' : 60.0,
+    'tau_data' : 30.0,
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m' : 1.0,
-    'alpha_u' : 0.055,   # 学習率
+    'alpha_u' : 0.0005,   # 学習率
     'alpha_gen' : 1e-4,  # 予測誤差の重み
     'alpha_disc' : 1.0,
     'thresh': 0.4,
@@ -65,7 +65,6 @@ class bPC_SNNLayer(nn.Module):
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
-        self.refrac_timer = None # 【追加】不応期タイマー
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -74,8 +73,6 @@ class bPC_SNNLayer(nn.Module):
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
-        # 【追加】不応期タイマー初期化
-        self.refrac_timer = torch.zeros(batch_size, self.dim, device=device)
 
     def switch_label_mode(self):
         self.is_label_layer = not self.is_label_layer
@@ -84,40 +81,19 @@ class bPC_SNNLayer(nn.Module):
         # ラベル層もテスト時(Inference Mode)はupdate_stateで動かす必要があるため条件を調整
         if not (self.is_data_layer or self.is_label_layer): 
             dt = self.cfg['dt']
-            T_r = self.cfg['T_r']
             
-            # 電流ダイナミクス (不応期に関わらず入力は積分されるモデルとする)
+            # LIF Dynamics
             d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
             self.j = self.j + (dt / self.cfg['tau_j']) * d_j
             
-            # 【追加】不応期判定
-            is_refractory = (self.refrac_timer > 0)
-
-            # 膜電位ダイナミクス
             d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-            v_next = self.v + (dt / self.cfg['tau_m']) * d_v
+            self.v = self.v + (dt / self.cfg['tau_m']) * d_v
             
-            # 【修正】不応期中のニューロンは膜電位更新をスキップ (0に固定)
-            # ※ 前のステップでリセットされていれば0のまま
-            self.v = torch.where(is_refractory, self.v, v_next)
-            
-            # スパイク生成 (閾値超え かつ 不応期でない)
             spikes = (self.v > self.cfg['thresh']).float()
-            spikes = spikes * (1.0 - is_refractory.float()) # 念のためマスク
-            
             self.s = spikes
+            self.v = self.v * (1 - spikes) 
             
-            # リセット
-            self.v = self.v * (1 - spikes)
-            
-            # 【追加】不応期タイマーの更新
-            # 1. 経過時間を引く
-            self.refrac_timer = torch.clamp(self.refrac_timer - dt, min=0)
-            # 2. スパイクしたニューロンのタイマーをセット
-            self.refrac_timer = torch.where(spikes > 0, torch.tensor(T_r, device=self.v.device), self.refrac_timer)
-
-            # トレース更新
-            self.x = self.x - (1 / self.cfg['tau_tr']) * self.x + spikes
+            self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
         
 
 class bPC_SNN(nn.Module):
@@ -346,10 +322,10 @@ def run_experiment(dataset_name='MNIST'):
                 targets.scatter_(1, lbls.view(-1, 1), 1)
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate, steps)
                 
                 # ターゲットをポアソンスパイクに変換
-                spike_targets = generate_poisson_spikes(targets, steps, CONFIG)
+                spike_targets = spikegen.rate(targets, steps)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
@@ -361,7 +337,6 @@ def run_experiment(dataset_name='MNIST'):
                     y_t = spike_targets[t]
                     
                     model.forward_dynamics(x_data=x_t, y_target=y_t, training_mode=True)
-                    
                     model.manual_weight_update(x_data=x_t, y_target=y_t)
                     model.clip_weights(20.0)
                 
@@ -379,16 +354,14 @@ def run_experiment(dataset_name='MNIST'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate,steps)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 sum_out_spikes = 0
                 
                 for t in range(steps):
                     x_t = spike_in[t]
-                    with torch.no_grad():
-                        model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
-                    
+                    model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
                     sum_out_spikes += model.layers[-1].s
                 
                 _, pred = torch.max(sum_out_spikes, 1)
