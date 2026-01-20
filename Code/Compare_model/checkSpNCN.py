@@ -11,7 +11,7 @@ import os
 # Fashion MNISTで安定した設定を採用
 CONFIG = {
     'dt': 0.25,
-    'tau_m': 20.0,
+    'tau_m': 25.0,
     'tau_j': 10.0,
     'tau_tr': 30.0,
     'kappa_j': 0.25,
@@ -117,14 +117,13 @@ class SpNCN(nn.Module):
         # total_synopsは累積させるためリセットしない（必要なら外部で管理）
 
     def clip_weights(self, max_norm=20.0):
-        with torch.no_grad():
-            for w_list in [self.W, self.E]:
-                for w in w_list:
-                    self._clip(w, max_norm)
-            self._clip(self.W_x, max_norm)
-            self._clip(self.E_x, max_norm)
-            if self.label_layer is not None:
-                self._clip(self.W_y, max_norm)
+        for w_list in [self.W, self.E]:
+            for w in w_list:
+                self._clip(w, max_norm)
+        self._clip(self.W_x, max_norm)
+        self._clip(self.E_x, max_norm)
+        if self.label_layer is not None:
+            self._clip(self.W_y, max_norm)
 
     def _clip(self, w, max_norm):
         norms = w.norm(p=2, dim=1, keepdim=True)
@@ -187,23 +186,22 @@ class SpNCN(nn.Module):
         lr = self.config['alpha_u']
         beta = self.config['beta']
         
-        with torch.no_grad():
-            s_h0 = self.hidden_layers[0].s
-            e_x = self.input_layer.e
+        s_h0 = self.hidden_layers[0].s
+        e_x = self.input_layer.e
+        
+        self.W_x += lr * (e_x.t() @ s_h0)
+        self.E_x += lr * beta * (s_h0.t() @ e_x)
+        
+        if self.label_layer is not None:
+            e_y = self.label_layer.e
+            self.W_y += lr * (e_y.t() @ s_h0)
             
-            self.W_x += lr * (e_x.t() @ s_h0)
-            self.E_x += lr * beta * (s_h0.t() @ e_x)
+        for i in range(len(self.hidden_layers) - 1):
+            s_upper = self.hidden_layers[i+1].s
+            e_lower = self.hidden_layers[i].e
             
-            if self.label_layer is not None:
-                e_y = self.label_layer.e
-                self.W_y += lr * (e_y.t() @ s_h0)
-                
-            for i in range(len(self.hidden_layers) - 1):
-                s_upper = self.hidden_layers[i+1].s
-                e_lower = self.hidden_layers[i].e
-                
-                self.W[i] += lr * (e_lower.t() @ s_upper)
-                self.E[i] += lr * beta * (s_upper.t() @ e_lower)
+            self.W[i] += lr * (e_lower.t() @ s_upper)
+            self.E[i] += lr * beta * (s_upper.t() @ e_lower)
 
 def run_experiment(dataset_name='MNIST'):
     """
@@ -240,92 +238,92 @@ def run_experiment(dataset_name='MNIST'):
     
     logs = []
 
-    for epoch in range(CONFIG['epochs']):
-        # --- Training ---
-        model.train()
-        train_correct = 0
-        train_samples = 0
-        epoch_start = time.time()
-        start_synops = model.total_synops
-        
-        for batch_idx, (imgs, lbls) in enumerate(train_l):
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+    with torch.no_grad():
+        for epoch in range(CONFIG['epochs']):
+            # --- Training ---
+            model.train()
+            train_correct = 0
+            train_samples = 0
+            epoch_start = time.time()
+            start_synops = model.total_synops
             
-            # ターゲット作成 (One-hot)
-            targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
-            targets.scatter_(1, lbls.view(-1, 1), 1)
-            
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
-            
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            out_spikes = 0
-            
-            for t in range(CONFIG['num_steps']):
-                x_t = spike_in[t]
-                # 学習時: y_targetあり
-                model.forward_dynamics(x_data=x_t, y_target=targets, training_mode=True)
-                model.manual_weight_update()
-                model.clip_weights(20.0)
-                out_spikes += model.label_layer.s
+            for batch_idx, (imgs, lbls) in enumerate(train_l):
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 
-            _, pred = torch.max(out_spikes, 1)
-            train_correct += (pred == lbls).sum().item()
-            train_samples += lbls.size(0)
-            
-            if batch_idx % 200 == 0:
-                print(f"Epoch {epoch} | Batch {batch_idx} | Train Acc: {100*train_correct/train_samples:.2f}%")
+                # ターゲット作成 (One-hot)
+                targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
+                targets.scatter_(1, lbls.view(-1, 1), 1)
+                
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
+                
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                out_spikes = 0
+                
+                for t in range(CONFIG['num_steps']):
+                    x_t = spike_in[t]
+                    # 学習時: y_targetあり
+                    model.forward_dynamics(x_data=x_t, y_target=targets, training_mode=True)
+                    model.manual_weight_update()
+                    model.clip_weights(20.0)
+                    out_spikes += model.label_layer.s
+                    
+                _, pred = torch.max(out_spikes, 1)
+                train_correct += (pred == lbls).sum().item()
+                train_samples += lbls.size(0)
+                
+                if batch_idx % 200 == 0:
+                    print(f"Epoch {epoch} | Batch {batch_idx} | Train Acc: {100*train_correct/train_samples:.2f}%")
 
-        train_acc = 100 * train_correct / train_samples
-        epoch_synops = model.total_synops - start_synops
-        
-        # --- Testing ---
-        model.eval() # 評価モード (本実装では挙動変わらずだが明示)
-        test_correct = 0
-        test_samples = 0
-        
-        # テスト時は勾配計算不要だが、状態更新は必要なので with torch.no_grad() は manual_weight_update 内のみ
-        # ただし全体を no_grad にしても forward_dynamics の計算（in-place更新）は可能
-        # ここでは重み更新がないことを保証するため手動更新を呼ばないことで対応
-        
-        for imgs, lbls in test_l:
-            imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
+            train_acc = 100 * train_correct / train_samples
+            epoch_synops = model.total_synops - start_synops
             
-            model.reset_state(imgs.size(0), CONFIG['device'])
-            out_spikes = 0
+            # --- Testing ---
+            model.eval() # 評価モード (本実装では挙動変わらずだが明示)
+            test_correct = 0
+            test_samples = 0
             
-            for t in range(CONFIG['num_steps']):
-                x_t = spike_in[t]
-                # テスト時: y_target=None (ターゲットなし、予測のみ)
-                # training_mode=False (SynOpsカウントしない、学習もしない)
-                with torch.no_grad():
+            # テスト時は勾配計算不要だが、状態更新は必要なので with torch.no_grad() は manual_weight_update 内のみ
+            # ただし全体を no_grad にしても forward_dynamics の計算（in-place更新）は可能
+            # ここでは重み更新がないことを保証するため手動更新を呼ばないことで対応
+            
+            for imgs, lbls in test_l:
+                imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
+                
+                model.reset_state(imgs.size(0), CONFIG['device'])
+                out_spikes = 0
+                
+                for t in range(CONFIG['num_steps']):
+                    x_t = spike_in[t]
+                    # テスト時: y_target=None (ターゲットなし、予測のみ)
+                    # training_mode=False (SynOpsカウントしない、学習もしない)
                     model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
-                out_spikes += model.label_layer.s
+                    out_spikes += model.label_layer.s
+                
+                _, pred = torch.max(out_spikes, 1)
+                test_correct += (pred == lbls).sum().item()
+                test_samples += lbls.size(0)
+                
+            test_acc = 100 * test_correct / test_samples
+            epoch_time = time.time() - epoch_start
             
-            _, pred = torch.max(out_spikes, 1)
-            test_correct += (pred == lbls).sum().item()
-            test_samples += lbls.size(0)
+            print(f"Epoch {epoch} Finished | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s | SynOps: {epoch_synops:.2e}")
             
-        test_acc = 100 * test_correct / test_samples
-        epoch_time = time.time() - epoch_start
-        
-        print(f"Epoch {epoch} Finished | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s | SynOps: {epoch_synops:.2e}")
-        
-        logs.append({
-            'dataset': dataset_name,
-            'epoch': epoch,
-            'train_acc': train_acc,
-            'test_acc': test_acc,
-            'time': epoch_time,
-            'synops': epoch_synops,
-            'total_synops': model.total_synops
-        })
-        
-        # CSV保存
-        df = pd.DataFrame(logs)
-        df.to_csv(f"{CONFIG['save_dir']}/log_{dataset_name}.csv", index=False)
+            logs.append({
+                'dataset': dataset_name,
+                'epoch': epoch,
+                'train_acc': train_acc,
+                'test_acc': test_acc,
+                'time': epoch_time,
+                'synops': epoch_synops,
+                'total_synops': model.total_synops
+            })
+            
+            # CSV保存
+            df = pd.DataFrame(logs)
+            df.to_csv(f"{CONFIG['save_dir']}/log_{dataset_name}.csv", index=False)
 
 if __name__ == "__main__":
     # MNISTの実験を実行
