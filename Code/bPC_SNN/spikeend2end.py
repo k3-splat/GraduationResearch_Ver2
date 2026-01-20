@@ -50,13 +50,12 @@ def generate_poisson_spikes(data, num_steps, config):
     return spikes
 
 class bPC_SNNLayer(nn.Module):
-    def __init__(self, idx, output_dim, config, data=False, label=False):
+    def __init__(self, idx, output_dim, config, data=False):
         super().__init__()
         self.idx = idx
         self.dim = output_dim
         self.cfg = config
         self.is_data_layer = data
-        self.is_label_layer = label
         
         # 内部状態
         self.v = None
@@ -74,27 +73,83 @@ class bPC_SNNLayer(nn.Module):
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
 
-    def switch_label_mode(self):
-        self.is_label_layer = not self.is_label_layer
-
     def update_state(self, total_input_current):
-        # ラベル層もテスト時(Inference Mode)はupdate_stateで動かす必要があるため条件を調整
-        if not (self.is_data_layer or self.is_label_layer): 
-            dt = self.cfg['dt']
-            
-            # LIF Dynamics
-            d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
-            self.j = self.j + (dt / self.cfg['tau_j']) * d_j
-            
-            d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-            self.v = self.v + (dt / self.cfg['tau_m']) * d_v
-            
-            spikes = (self.v > self.cfg['thresh']).float()
-            self.s = spikes
-            self.v = self.v * (1 - spikes) 
-            
-            self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
+        dt = self.cfg['dt']
         
+        # LIF Dynamics
+        d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
+        self.j = self.j + (dt / self.cfg['tau_j']) * d_j
+        
+        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
+        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+        
+        spikes = (self.v > self.cfg['thresh']).float()
+        self.s = spikes
+        self.v = self.v * (1 - spikes) 
+        
+        if not self.is_data_layer:
+            self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
+
+class label_layer(nn.Module):
+    def __init__(self, output_dim, config):
+        super().__init__()
+        self.dim = output_dim
+        self.cfg = config
+        self.is_training = True
+
+        self.v_tmp = None
+        self.s_tmp = None
+        self.j_tmp = None
+
+        self.v = None
+        self.s = None
+        self.x = None # Trace or Input
+        self.j = None # Input Current State
+        self.e_disc = None
+
+    def init_state(self, batch_size, device):
+        self.v = torch.zeros(batch_size, self.dim, device=device)
+        self.s = torch.zeros(batch_size, self.dim, device=device)
+        self.x = torch.zeros(batch_size, self.dim, device=device)
+        self.j = torch.zeros(batch_size, self.dim, device=device)
+        self.e_disc = torch.zeros(batch_size, self.dim, device=device)
+
+        if not self.is_training:
+            self.v_tmp = torch.zeros(batch_size, self.dim, device=device)
+            self.s_tmp = torch.zeros(batch_size, self.dim, device=device)
+            self.j_tmp = torch.zeros(batch_size, self.dim, device=device)
+
+    def switch2training_mode(self):
+        self.is_training = True
+
+    def switch2testing_mode(self):
+        self.is_training = False
+
+    def update_state(self, input2main, input2tmp=None):
+        dt = self.cfg['dt']
+
+        if not self.is_training:
+            d_j_tmp = (-self.cfg['kappa_j'] * self.j_tmp + input2tmp)
+            self.j_tmp = self.j_tmp + (dt / self.cfg['tau_j']) * d_j_tmp
+            
+            d_v_tmp = (-self.cfg['gamma_m'] * self.v_tmp + self.cfg['R_m'] * self.j_tmp)
+            self.v_tmp = self.v_tmp + (dt / self.cfg['tau_m']) * d_v_tmp
+            
+            spikes_tmp = (self.v_tmp > self.cfg['thresh']).float()
+            self.s_tmp = spikes_tmp
+            self.v_tmp = self.v_tmp * (1 - spikes_tmp)
+        
+        # LIF Dynamics
+        d_j = (-self.cfg['kappa_j'] * self.j - input2main)
+        self.j = self.j + (dt / self.cfg['tau_j']) * d_j
+        
+        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
+        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+        
+        spikes = (self.v > self.cfg['thresh']).float()
+        self.s = spikes
+        self.v = self.v * (1 - spikes)
+
 
 class bPC_SNN(nn.Module):
     def __init__(self, layer_sizes, config):
@@ -105,9 +160,11 @@ class bPC_SNN(nn.Module):
 
         # レイヤー生成
         for i, size in enumerate(layer_sizes):
-            is_data = (i == 0)
-            is_label = (i == len(layer_sizes) - 1)
-            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data, label=is_label))
+            if i == len(layer_sizes) - 1:
+                self.layers.append(label_layer(output_dim=size, config=config))
+            else:
+                is_data = (i == 0)
+                self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config, data=is_data))
             
         # --- 重み定義 ---
         self.W = nn.ParameterList() # Top-down (Upper -> Lower) [Generative]
@@ -121,63 +178,54 @@ class bPC_SNN(nn.Module):
             self.W.append(nn.Parameter(torch.randn(dim_lower, dim_upper) * 0.5))
             self.V.append(nn.Parameter(torch.randn(dim_upper, dim_lower) * 0.5))
 
-        self.total_synops = 0.0
-        self.z_data = None # データ層のトレース用
-        self.z_label = None # ラベル層のトレース用
-
     def reset_state(self, batch_size, device):
         for layer in self.layers:
             layer.init_state(batch_size, device)
-            
-            if layer.is_data_layer:
-                # データ層用のトレース変数を初期化
-                self.z_data = torch.zeros(batch_size, layer.dim, device=device)
-            
-            if layer.is_label_layer:
-                self.z_label = torch.zeros(batch_size, layer.dim, device=device)
 
     def clip_weights(self, max_norm=20.0):
-        with torch.no_grad():
-            for w_list in [self.W, self.V]:
-                for w in w_list:
-                    norms = w.norm(p=2, dim=1, keepdim=True)
-                    mask = norms > max_norm
-                    w.data.copy_(torch.where(mask, w * (max_norm / (norms + 1e-8)), w))
+        for w_list in [self.W, self.V]:
+            for w in w_list:
+                norms = w.norm(p=2, dim=1, keepdim=True)
+                mask = norms > max_norm
+                w.data.copy_(torch.where(mask, w * (max_norm / (norms + 1e-8)), w))
 
-    def forward_dynamics(self, x_data, y_target=None, training_mode=True):
+    def forward_dynamics(self, x_data, y_target=None):
         alpha_gen = self.config['alpha_gen']
         alpha_disc = self.config['alpha_disc']
 
         # === 1. Update Phase ===
         # 学習時
-        if training_mode and y_target is not None:
+        if y_target is not None:
             # ニューロン活動更新
             for i, layer in enumerate(self.layers):
                 total_input = 0
 
-                # 学習時は，データ層とラベル層を除いたところでLIFニューロンとして活動する
-                # ラベル層は教師信号で誤差計算するため、ここでの自発活動更新はスキップ
-                if i > 0 and i < len(self.layers) - 1:
-                    # 上からの予測/誤差フィードバック
-                    if i < len(self.layers) - 1:
-                        total_input += (- layer.e_gen)
-                        e_disc_upper = self.layers[i+1].e_disc
-                        total_input += torch.matmul(e_disc_upper, self.V[i]) 
-                    
-                    # 下からの予測/誤差フィードバック
+                if i == 0:
+                    s_upper = self.layers[i+1].s
+                    total_input += torch.matmul(s_upper, self.W[i].t())
+
+                elif i < len(self.layers) - 1:
+                    # 自層の識別的予測誤差&下からの予測誤差フィードバック
                     total_input += (- layer.e_disc)
                     e_gen_lower = self.layers[i-1].e_gen
                     total_input += torch.matmul(e_gen_lower, self.W[i-1])
+
+                    # 自層の生成的予測誤差&上からの予測誤差フィードバック
+                    total_input += (- layer.e_gen)
+                    e_disc_upper = self.layers[i+1].e_disc
+                    total_input += torch.matmul(e_disc_upper, self.V[i])
+
+                else:
+                    s_lower = self.layers[i-1].s
+                    total_input += torch.matmul(s_lower, self.V[i-1].t())
 
                 layer.update_state(total_input)
 
             # 誤差計算
             for i, layer in enumerate(self.layers):
                 if i == 0:
-                    self.z_data += - self.z_data / self.config['tau_data'] + x_data
-                    s_upper = self.layers[i+1].s
-                    z_gen_pred = torch.matmul(s_upper, self.W[i].t())
-                    layer.e_gen = alpha_gen * (self.z_data - z_gen_pred)
+                    s_own = self.layers[i].s
+                    layer.e_gen = alpha_gen * (x_data - s_own)
 
                 elif i < len(self.layers) - 1:
                     # Discriminative Error (Bottom-up Error)
@@ -201,11 +249,9 @@ class bPC_SNN(nn.Module):
                 
                 else:
                     # ラベル層 (Output)
-                    self.z_label += (-self.z_label / self.config['tau_data'] + y_target)
-                    s_lower = self.layers[i-1].s
-                    z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
-                    # 教師信号(Trace)との誤差
-                    layer.e_disc = alpha_disc * (self.z_label - z_disc_pred)
+                    s_own = self.layers[i].s
+                    # 教師信号との誤差
+                    layer.e_disc = alpha_disc * (y_target - s_own)
 
         # テスト時
         else:
@@ -213,41 +259,62 @@ class bPC_SNN(nn.Module):
             for i, layer in enumerate(self.layers):
                 total_input = 0
 
-                if i > 0:
-                    # 上からの予測/誤差フィードバック
-                    if i < len(self.layers) - 1:
-                        total_input += (- layer.e_gen)
-                        e_disc_upper = self.layers[i+1].e_disc
-                        total_input += torch.matmul(e_disc_upper, self.V[i]) 
-                    
-                    # 下からの予測/誤差フィードバック
+                if i == 0:
+                    s_upper = self.layers[i+1].s
+                    total_input += torch.matmul(s_upper, self.W[i].t())
+
+                    layer.update_state(total_input)
+
+                elif i < len(self.layers) - 1:
+                    # 自層の識別的予測誤差&下からの予測誤差フィードバック
                     total_input += (- layer.e_disc)
                     e_gen_lower = self.layers[i-1].e_gen
                     total_input += torch.matmul(e_gen_lower, self.W[i-1])
 
-                layer.update_state(total_input)
+                    # 自層の生成的予測誤差&上からの予測誤差フィードバック
+                    total_input += (- layer.e_gen)
+                    e_disc_upper = self.layers[i+1].e_disc
+                    total_input += torch.matmul(e_disc_upper, self.V[i])
+
+                    layer.update_state(total_input)
+
+                else:
+                    input2main = 0
+                    input2tmp = 0
+
+                    input2main += layer.e_disc
+                    e_gen_lower = self.layers[i-1].e_gen
+                    input2main += torch.matmul(e_gen_lower, self.W[i-1])
+
+                    s_lower = self.layers[i-1].s
+                    input2tmp += torch.matmul(s_lower, self.V[i-1].t())
+
+                    layer.update_state(input2main, input2tmp)
 
             # 誤差計算
             for i, layer in enumerate(self.layers):
                 if i == 0:
-                    self.z_data += (- self.z_data / self.config['tau_data'] + x_data)
-                    s_upper = self.layers[i+1].s
-                    z_gen_pred = torch.matmul(s_upper, self.W[i].t())
-                    layer.e_gen = alpha_gen * (self.z_data - z_gen_pred)
+                    s_own = self.layers[i].s
+                    layer.e_gen = alpha_gen * (x_data - s_own)
 
-                elif i < len(self.layers):
+                else:
                     if i == 1:
-                        z_disc_data = torch.matmul(self.z_data, self.V[i-1].t())
+                        z_disc_data = torch.matmul(x_data, self.V[i-1].t())
                         layer.e_disc = alpha_disc * (layer.x - z_disc_data)
-                    else:
+
+                    elif i < len(self.layers) - 1:
                         s_lower = self.layers[i-1].s
                         z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
                         layer.e_disc = alpha_disc * (layer.x - z_disc_pred)
 
-                    if i < len(self.layers) - 1:
                         s_upper = self.layers[i+1].s
                         z_gen_pred = torch.matmul(s_upper, self.W[i].t())
                         layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
+
+                    else:
+                        s_tmp = layer.s_tmp
+                        s_own = layer.s
+                        layer.e_disc = alpha_disc * (s_own - s_tmp)
 
     def manual_weight_update(self, x_data, y_target=None):
         """
@@ -312,7 +379,6 @@ def run_experiment(dataset_name='MNIST'):
             # --- Training ---
             model.train()
             epoch_start = time.time()
-            model.total_synops = 0 
             
             for batch_idx, (imgs, lbls) in enumerate(train_l):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
@@ -331,7 +397,7 @@ def run_experiment(dataset_name='MNIST'):
                 for t in range(steps):
                     x_t = spike_in[t]
                     
-                    model.forward_dynamics(x_data=x_t, y_target=targets, training_mode=True)
+                    model.forward_dynamics(x_data=x_t, y_target=targets)
                     model.manual_weight_update(x_data=x_t, y_target=targets)
                     model.clip_weights(20.0)
                 
@@ -340,7 +406,7 @@ def run_experiment(dataset_name='MNIST'):
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
-            model.layers[-1].switch_label_mode()
+            model.layers[-1].switch2testing_mode()
 
             model.eval()
             test_correct = 0
@@ -356,7 +422,7 @@ def run_experiment(dataset_name='MNIST'):
                 
                 for t in range(steps):
                     x_t = spike_in[t]
-                    model.forward_dynamics(x_data=x_t, y_target=None, training_mode=False)
+                    model.forward_dynamics(x_data=x_t, y_target=None)
                     sum_out_spikes += model.layers[-1].s
                 
                 _, pred = torch.max(sum_out_spikes, 1)
@@ -369,7 +435,7 @@ def run_experiment(dataset_name='MNIST'):
             print(f"Epoch {epoch} DONE | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
             
             print("Switching label layer back to Training Mode (Clamp)...")
-            model.layers[-1].switch_label_mode()
+            model.layers[-1].switch2training_mode()
 
             logs.append({
                 'dataset': dataset_name,
