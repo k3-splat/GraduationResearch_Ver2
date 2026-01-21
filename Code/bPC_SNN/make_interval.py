@@ -11,7 +11,8 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 50.0, # データ提示時間
+    'T_st' : 25.0, # データ提示時間
+    'T_interval' : 90.0,
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -26,7 +27,7 @@ CONFIG = {
     'batch_size': 64,
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'save_dir': './results/bPC_SNN',
+    'save_dir': './results/SpNCN_Comparison',
     'max_freq': 63.75   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
 }
 
@@ -220,7 +221,7 @@ class bPC_SNN(nn.Module):
                     s_lower = self.layers[i-1].s
                     total_input += torch.matmul(s_lower, self.V[i-1].t())
 
-                layer.update_state(total_input)
+                    layer.update_state(total_input)
 
             # 誤差計算
             for i, layer in enumerate(self.layers):
@@ -356,12 +357,13 @@ def run_experiment(dataset_name='MNIST'):
         # スクリプトファイル名を取得 (拡張子なし)
         script_name = os.path.splitext(os.path.basename(__file__))[0]
     except NameError:
+        # Jupyter Notebook等で __file__ が未定義の場合
         script_name = "notebook_execution"
 
-    # 日時を取得
+    # 日時を取得 (例: 20250101_120000)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
-    # 保存パスの決定: log_[スクリプト名]_[データセット]_[日時].csv
+    # 保存パスの決定
     save_file_path = f"{CONFIG['save_dir']}/log_{script_name}_{dataset_name}_{timestamp}.csv"
     print(f"Results will be saved to: {save_file_path}")
     # ----------------------------
@@ -388,6 +390,7 @@ def run_experiment(dataset_name='MNIST'):
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
+    steps_int = int(CONFIG['T_interval'] / CONFIG['dt'])
     logs = []
 
     with torch.no_grad():
@@ -409,6 +412,7 @@ def run_experiment(dataset_name='MNIST'):
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
                 sum_out_spikes = 0
+                spike_interval_end = 0
                 
                 for t in range(steps):
                     x_t = spike_in[t]
@@ -417,9 +421,20 @@ def run_experiment(dataset_name='MNIST'):
                     model.manual_weight_update(x_data=x_t, y_target=targets)
                     model.clip_weights(20.0)
                     sum_out_spikes += model.layers[-1].s
+
+                print(sum_out_spikes)
                 
+                zero_data = torch.zeros_like(spike_in[0])
+                zero_label = torch.zeros_like(targets)
+                for t in range(steps_int):
+                    model.forward_dynamics(x_data=zero_data, y_target=zero_label)
+                    model.manual_weight_update(x_data=zero_data, y_target=zero_label)
+                    model.clip_weights(20.0)
+
+                spike_interval_end = model.layers[-1].s
+                print(spike_interval_end)
+
                 if batch_idx % 100 == 0:
-                    print(sum_out_spikes)
                     print(f"Epoch {epoch} | Batch {batch_idx}")
         
             # --- Testing ---
