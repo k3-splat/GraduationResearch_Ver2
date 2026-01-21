@@ -402,9 +402,9 @@ def run_experiment(dataset_name='MNIST'):
                     model.clip_weights(20.0)
                     sum_out_spikes += model.layers[-1].s
                 
-                _, pred = torch.max(sum_out_spikes, 1)
+                # _, pred = torch.max(sum_out_spikes, 1)
                 if batch_idx % 100 == 0:
-                    print(pred)
+                    print(sum_out_spikes)
                     print(f"Epoch {epoch} | Batch {batch_idx}")
         
             # --- Testing ---
