@@ -11,8 +11,8 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 25.0, # データ提示時間
-    'T_interval' : 90.0,
+    'T_st' : 100.0, # データ提示時間
+    'T_interval' : 50.0,
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -184,6 +184,13 @@ class bPC_SNN(nn.Module):
         for layer in self.layers:
             layer.init_state(batch_size, device)
 
+    def reset_e_data_and_label(self):
+        for layer in self.layers:
+            if layer.is_data_layer:
+                layer.init_e_gen()
+            elif isinstance(layer, label_layer):
+                layer.init_e_disc()
+
     def clip_weights(self, max_norm=20.0):
         for w_list in [self.W, self.V]:
             for w in w_list:
@@ -191,7 +198,7 @@ class bPC_SNN(nn.Module):
                 mask = norms > max_norm
                 w.data.copy_(torch.where(mask, w * (max_norm / (norms + 1e-8)), w))
 
-    def forward_dynamics(self, x_data, y_target=None):
+    def forward_dynamics(self, interval=False, x_data=None, y_target=None):
         alpha_gen = self.config['alpha_gen']
         alpha_disc = self.config['alpha_disc']
 
@@ -221,7 +228,7 @@ class bPC_SNN(nn.Module):
                     s_lower = self.layers[i-1].s
                     total_input += torch.matmul(s_lower, self.V[i-1].t())
 
-                    layer.update_state(total_input)
+                layer.update_state(total_input)
 
             # 誤差計算
             for i, layer in enumerate(self.layers):
@@ -254,6 +261,50 @@ class bPC_SNN(nn.Module):
                     s_own = self.layers[i].s
                     # 教師信号との誤差
                     layer.e_disc = alpha_disc * (y_target - s_own)
+
+        elif interval:
+            # ニューロン活動更新
+            for i, layer in enumerate(self.layers):
+                total_input = 0
+
+                if i > 0 and i < len(self.layers) - 1:
+                    # 自層の識別的予測誤差&下からの予測誤差フィードバック
+                    total_input += (- layer.e_disc)
+                    e_gen_lower = self.layers[i-1].e_gen
+                    total_input += torch.matmul(e_gen_lower, self.W[i-1])
+
+                    # 自層の生成的予測誤差&上からの予測誤差フィードバック
+                    total_input += (- layer.e_gen)
+                    e_disc_upper = self.layers[i+1].e_disc
+                    total_input += torch.matmul(e_disc_upper, self.V[i])
+
+                layer.update_state(total_input)
+
+            # 誤差計算
+            for i, layer in enumerate(self.layers):
+                if i == 0:
+                    layer.e_gen.zero_()
+
+                elif i < len(self.layers) - 1:
+                    # Discriminative Error (Bottom-up Error)
+                    if i == 1:
+                        layer.e_disc.zero_()
+                    else:
+                        s_lower = self.layers[i-1].s
+                        z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
+                        layer.e_disc = alpha_disc * (layer.x - z_disc_pred)
+
+                    # Generative Error (Top-down Error)
+                    if i < len(self.layers) - 2:
+                        s_upper = self.layers[i+1].s
+                        z_gen_pred = torch.matmul(s_upper, self.W[i].t())
+                        layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
+                    else:
+                        layer.e_gen.zero_()
+                
+                else:
+                    # ラベル層 (Output)
+                    layer.e_disc.zero_()
 
         # テスト時
         else:
@@ -387,6 +438,7 @@ def run_experiment(dataset_name='MNIST'):
     
     # モデル構築
     layer_sizes = [784, 500, 500, 10]
+    total_num_neurons = sum(layer_sizes) # 【追加】全ニューロン数
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
@@ -412,8 +464,9 @@ def run_experiment(dataset_name='MNIST'):
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
                 sum_out_spikes = 0
-                spike_interval_end = 0
+                spike_end_interval = 0
                 
+                # === Training Phase ===
                 for t in range(steps):
                     x_t = spike_in[t]
                     
@@ -422,20 +475,23 @@ def run_experiment(dataset_name='MNIST'):
                     model.clip_weights(20.0)
                     sum_out_spikes += model.layers[-1].s
 
-                print(sum_out_spikes)
-                
+                # === Interval Phase ===
                 zero_data = torch.zeros_like(spike_in[0])
                 zero_label = torch.zeros_like(targets)
+                
                 for t in range(steps_int):
-                    model.forward_dynamics(x_data=zero_data, y_target=zero_label)
+                    model.forward_dynamics(interval=True)
                     model.manual_weight_update(x_data=zero_data, y_target=zero_label)
                     model.clip_weights(20.0)
 
-                spike_interval_end = model.layers[-1].s
-                print(spike_interval_end)
-
+                spike_end_interval = model.layers[-1].s
+                
                 if batch_idx % 100 == 0:
                     print(f"Epoch {epoch} | Batch {batch_idx}")
+                    print("--- spikes (training) ---")
+                    print(sum_out_spikes)
+                    print("--- spikes (finish interval) ---")
+                    print(spike_end_interval)
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")

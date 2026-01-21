@@ -11,7 +11,7 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 50.0, # データ提示時間
+    'T_st' : 25.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
