@@ -325,33 +325,34 @@ def objective(trial):
     best_acc = 0.0
 
     # 4. 学習ループ
-    for epoch in range(config['epochs']):
-        # --- Training ---
-        model.train()
-        for batch_idx, (imgs, lbls) in enumerate(train_l):
-            imgs, lbls = imgs.to(config['device']), lbls.to(config['device'])
+    with torch.no_grad():
+        for epoch in range(config['epochs']):
+            # --- Training ---
+            model.train()
             
-            targets = torch.zeros(imgs.size(0), 10).to(config['device'])
-            targets.scatter_(1, lbls.view(-1, 1), 1)
-            
-            imgs_rate = torch.clamp(imgs, 0, 1)
-            spike_in = spikegen.rate(imgs_rate, steps)
-            
-            model.reset_state(imgs.size(0), config['device'])
-            
-            for t in range(steps):
-                x_t = spike_in[t]
-                model.forward_dynamics(x_data=x_t, y_target=targets)
-                model.manual_weight_update(x_data=x_t, y_target=targets)
-                model.clip_weights(20.0)
-    
-        # --- Testing ---
-        model.layers[-1].switch2testing_mode()
-        model.eval()
-        test_correct = 0
-        test_samples = 0
+            for _, (imgs, lbls) in enumerate(train_l):
+                imgs, lbls = imgs.to(config['device']), lbls.to(config['device'])
+                
+                targets = torch.zeros(imgs.size(0), 10).to(config['device'])
+                targets.scatter_(1, lbls.view(-1, 1), 1)
+                
+                imgs_rate = torch.clamp(imgs, 0, 1)
+                spike_in = spikegen.rate(imgs_rate, steps)
+                
+                model.reset_state(imgs.size(0), config['device'])
+                
+                for t in range(steps):
+                    x_t = spike_in[t]
+                    model.forward_dynamics(x_data=x_t, y_target=targets)
+                    model.manual_weight_update(x_data=x_t, y_target=targets)
+                    model.clip_weights(20.0)
         
-        with torch.no_grad():
+            # --- Testing ---
+            model.layers[-1].switch2testing_mode()
+            model.eval()
+            test_correct = 0
+            test_samples = 0
+            
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(config['device']), lbls.to(config['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
@@ -368,20 +369,20 @@ def objective(trial):
                 _, pred = torch.max(sum_out_spikes, 1)
                 test_correct += (pred == lbls).sum().item()
                 test_samples += lbls.size(0)
+                
+            test_acc = 100 * test_correct / test_samples
             
-        test_acc = 100 * test_correct / test_samples
-        
-        model.layers[-1].switch2training_mode()
-        
-        # 途中経過報告 (Pruning用)
-        trial.report(test_acc, epoch)
-        
-        # 枝刈り判定 (有望でない試行はここで打ち切り)
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
+            model.layers[-1].switch2training_mode()
             
-        if test_acc > best_acc:
-            best_acc = test_acc
+            # 途中経過報告 (Pruning用)
+            trial.report(test_acc, epoch)
+            
+            # 枝刈り判定 (有望でない試行はここで打ち切り)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+                
+            if test_acc > best_acc:
+                best_acc = test_acc
 
     return best_acc
 
