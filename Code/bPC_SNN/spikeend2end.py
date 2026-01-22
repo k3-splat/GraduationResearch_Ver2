@@ -11,7 +11,7 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 25.0, # データ提示時間
+    'T_st' : 100.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -20,14 +20,14 @@ CONFIG = {
     'gamma_m': 1.0,
     'R_m' : 1.0,
     'alpha_u' : 0.0005,   # 学習率
-    'alpha_gen' : 1.0,  # 予測誤差の重み
-    'alpha_disc' : 0.01,
+    'alpha_gen' : 0.75,  # 予測誤差の重み
+    'alpha_disc' : 0.25,
     'thresh': 0.4,
     'batch_size': 64,
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/bPC_SNN',
-    'max_freq': 63.75   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
+    'max_freq': 2000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
 }
 
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
@@ -405,6 +405,7 @@ def run_experiment(dataset_name='MNIST'):
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
                 spike_in = spikegen.rate(imgs_rate, steps)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
@@ -433,7 +434,8 @@ def run_experiment(dataset_name='MNIST'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = spikegen.rate(imgs_rate,steps)
+                spike_in = spikegen.rate(imgs_rate, steps)
+                # spike_in = generate_poisson_spikes(imgs_rate,steps,CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 sum_out_spikes = 0

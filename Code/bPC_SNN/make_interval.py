@@ -21,8 +21,8 @@ CONFIG = {
     'gamma_m': 1.0,
     'R_m' : 1.0,
     'alpha_u' : 0.0005,   # 学習率
-    'alpha_gen' : 1.0,  # 予測誤差の重み
-    'alpha_disc' : 1.0,
+    'alpha_gen' : 0.5,  # 予測誤差の重み
+    'alpha_disc' : 0.5,
     'thresh': 0.4,
     'batch_size': 64,
     'epochs': 10,
