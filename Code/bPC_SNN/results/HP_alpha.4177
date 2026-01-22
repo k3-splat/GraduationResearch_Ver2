@@ -1,0 +1,35 @@
+DO Python file
+[I 2026-01-22 19:14:57,784] A new study created in memory with name: no-name-ebce8cfb-0d48-4579-9568-d9e14f5e2101
+[W 2026-01-22 19:14:59,627] Trial 0 failed with parameters: {'ratio': 49.07971192424775, 'alpha_u': 0.002940067096589367} because of the following error: RuntimeError('a leaf Variable that requires grad is being used in an in-place operation.').
+Traceback (most recent call last):
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 205, in _run_trial
+    value_or_values = func(trial)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 345, in objective
+    model.manual_weight_update(x_data=x_t, y_target=targets)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 267, in manual_weight_update
+    self.V[i] += alpha_u * grad_V
+RuntimeError: a leaf Variable that requires grad is being used in an in-place operation.
+[W 2026-01-22 19:14:59,628] Trial 0 failed with value None.
+Starting optimization...
+
+Trial 0: ratio=49.0797 (gen=0.9800, disc=0.0200), alpha_u=2.94e-03
+Traceback (most recent call last):
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 418, in <module>
+    run_optimization()
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 394, in run_optimization
+    study.optimize(objective, n_trials=20) # 必要に応じて回数を調整してください
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/study.py", line 490, in optimize
+    _optimize(
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 67, in _optimize
+    _optimize_sequential(
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 164, in _optimize_sequential
+    frozen_trial_id = _run_trial(study, func, catch)
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 262, in _run_trial
+    raise func_err
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/optuna/study/_optimize.py", line 205, in _run_trial
+    value_or_values = func(trial)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 345, in objective
+    model.manual_weight_update(x_data=x_t, y_target=targets)
+  File "/home/st6322045/GraduationResearch_Ver2/Code/bPC_SNN/HP_alpha.py", line 267, in manual_weight_update
+    self.V[i] += alpha_u * grad_V
+RuntimeError: a leaf Variable that requires grad is being used in an in-place operation.
