@@ -11,7 +11,7 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 25.0,
+    'T_st' : 25.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -20,14 +20,14 @@ CONFIG = {
     'gamma_m': 1.0,
     'R_m' : 1.0,
     'alpha_u' : 0.0005,   # 学習率
-    'alpha_gen' : 0.5,  # 予測誤差の重み
-    'alpha_disc' : 0.5,
+    'alpha_gen' : 1.0,  # 予測誤差の重み
+    'alpha_disc' : 1.0,
     'thresh': 0.4,
     'batch_size': 64,
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/bPC_SNN',
-    'max_freq': 2000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
+    'max_freq': 3000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
 }
 
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
@@ -189,6 +189,73 @@ class bPC_SNN(nn.Module):
                 norms = w.norm(p=2, dim=1, keepdim=True)
                 mask = norms > max_norm
                 w.data.copy_(torch.where(mask, w * (max_norm / (norms + 1e-8)), w))
+    
+    def run_feedforward_initialization(self, x_data, is_Testing=False):
+        """
+        bPCの初期化フェーズを再現するメソッド。
+        下位層からのフィードフォワードスイープにより、各層の初期状態(v, j, s)を設定する。
+        f(x_l)として生成されたスパイク(s)を次の層への入力として使用する。
+        """
+        # 入力データ(Rate/Intensity)を最初のスパイク入力とみなしてスタート
+        # Layer 0はData Layerなので内部状態の更新対象ではないが、sweepの起点となる
+        current_input = x_data 
+
+        # 学習時
+        for i in range(1, len(self.layers) - 1):
+            layer = self.layers[i]
+            
+            # Bottom-up入力の計算: 前の層の出力(current_input) x V
+            # self.V[i-1] は Layer i と Layer i-1 を結ぶ Bottom-up 重み
+            # Vのshapeは (dim_upper, dim_lower) なので、 input @ V.t() で (Batch, dim_upper)
+            weight = self.V[i-1]
+            input_signal = torch.matmul(current_input, weight.t())
+            
+            # 状態の初期化 (瞬時に充電されると仮定)
+            layer.j = input_signal
+            layer.v = self.config['R_m'] * input_signal 
+            
+            # スパイク生成 (f(x_l) = s)
+            spikes = (layer.v > self.config['thresh']).float()
+            layer.s = spikes
+            
+            # スパイクしたニューロンの膜電位をリセット (Soft Reset)
+            layer.v = layer.v * (1 - spikes)
+            
+            # トレースの初期化 (オプション: スパイクが発生したならトレースも反応させる)
+            if hasattr(layer, 'x') and layer.x is not None:
+                # 1ステップ分の更新を適用、あるいは単にスパイク値をセット
+                layer.x = spikes
+
+            # 次の層への入力として、今生成されたスパイクを使用する
+            current_input = spikes
+
+        if is_Testing:
+            layer = self.layers[-1]
+            
+            # Bottom-up入力の計算: 前の層の出力(current_input) x V
+            # self.V[i-1] は Layer i と Layer i-1 を結ぶ Bottom-up 重み
+            # Vのshapeは (dim_upper, dim_lower) なので、 input @ V.t() で (Batch, dim_upper)
+            weight = self.V[-2]
+            input_signal = torch.matmul(current_input, weight.t())
+
+            layer.j_tmp = input_signal
+            layer.v_tmp = self.config['R_m'] * input_signal
+
+            spikes = (layer.v_tmp > self.config['thresh']).float()
+            layer.s_tmp = spikes
+            
+            # スパイクしたニューロンの膜電位をリセット (Soft Reset)
+            layer.v_tmp = layer.v_tmp * (1 - spikes)
+
+            layer.j = layer.s_tmp
+            layer.v = self.config['R_m'] * layer.j
+            
+            # スパイク生成 (f(x_l) = s)
+            spikes = (layer.v > self.config['thresh']).float()
+            layer.s = spikes
+            
+            # スパイクしたニューロンの膜電位をリセット (Soft Reset)
+            layer.v = layer.v * (1 - spikes)
 
     def forward_dynamics(self, x_data, y_target=None):
         alpha_gen = self.config['alpha_gen']
@@ -384,7 +451,7 @@ def run_experiment(dataset_name='MNIST'):
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
-    layer_sizes = [784, 1000, 1000, 10]
+    layer_sizes = [784, 500, 500, 10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
@@ -409,6 +476,11 @@ def run_experiment(dataset_name='MNIST'):
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
+                # --- 追加: Feedforward Initialization ---
+                # 各バッチの開始時に、フィードフォワードスイープによる初期化を実行
+                # model.run_feedforward_initialization(spike_in[0])
+                # -------------------------------------
+                
                 sum_out_spikes = 0
                 
                 for t in range(steps):
@@ -422,7 +494,6 @@ def run_experiment(dataset_name='MNIST'):
                 if batch_idx % 100 == 0:
                     # print(sum_out_spikes)
                     print(f"Epoch {epoch} | Batch {batch_idx}")
-                    print(model.layers[-1].e_disc)
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
@@ -436,9 +507,15 @@ def run_experiment(dataset_name='MNIST'):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
                 spike_in = spikegen.rate(imgs_rate, steps)
-                # spike_in = generate_poisson_spikes(imgs_rate,steps,CONFIG)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
+                
+                # --- 追加: Feedforward Initialization ---
+                # テスト時も同様に初期化を実行
+                # model.run_feedforward_initialization(spike_in[0])
+                # -------------------------------------
+
                 sum_out_spikes = 0
                 
                 for t in range(steps):

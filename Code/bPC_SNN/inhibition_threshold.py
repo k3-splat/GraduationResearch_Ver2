@@ -6,12 +6,13 @@ from snntorch import spikegen
 import time
 import pandas as pd
 import os
+import math
 from datetime import datetime
 
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 25.0,
+    'T_st' : 25.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -19,15 +20,21 @@ CONFIG = {
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m' : 1.0,
-    'alpha_u' : 0.0005,   # 学習率
-    'alpha_gen' : 0.5,  # 予測誤差の重み
-    'alpha_disc' : 0.5,
-    'thresh': 0.4,
+    'alpha_u' : 0.005,    # 学習率
+    'alpha_gen' : 1.0,    # 予測誤差の重み
+    'alpha_disc' : 1.0,
+    'thresh': 0.4,        # 閾値
     'batch_size': 64,
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/bPC_SNN',
-    'max_freq': 2000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
+    'max_freq': 3000.0,   # ポアソン生成用の最大周波数(Hz)
+    
+    # --- Diehl & Cook 2015 再現用パラメータ ---
+    'theta_plus': 0.05,    # 発火時に閾値を加算する量 (Homeostasis)
+    'tau_theta': 1000.0,   # 適応閾値の減衰時定数 (ms)
+    'w_inh': 1.0,          # 側抑制の重み
+    'noise_std': 0.01      # --- 追加: 膜電位に加えるノイズの標準偏差 ---
 }
 
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
@@ -65,6 +72,16 @@ class bPC_SNNLayer(nn.Module):
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
+        
+        # 適応的閾値用の変数
+        self.theta = None
+
+        # 側抑制用の固定重み行列 (自分自身以外への抑制)
+        if not self.is_data_layer:
+            w_inh_val = self.cfg['w_inh']
+            self.W_inh = torch.ones(output_dim, output_dim) * (-w_inh_val)
+            self.W_inh.fill_diagonal_(0.0)
+            self.W_inh = self.W_inh.to(self.cfg['device'])
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -73,21 +90,47 @@ class bPC_SNNLayer(nn.Module):
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
+        
+        # 適応的閾値の初期化
+        self.theta = torch.zeros(batch_size, self.dim, device=device)
 
     def update_state(self, total_input_current):
         dt = self.cfg['dt']
         
-        # LIF Dynamics
+        # --- 側抑制 (Lateral Inhibition) ---
+        lateral_inhibition = 0
+        if not self.is_data_layer:
+            lateral_inhibition = torch.matmul(self.s, self.W_inh.t())
+
+        # --- 適応的閾値の減衰 ---
+        decay_factor = torch.exp(torch.tensor(-dt / self.cfg['tau_theta'], device=self.theta.device))
+        self.theta = self.theta * decay_factor
+
+        # --- LIF Dynamics ---
         d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
         self.j = self.j + (dt / self.cfg['tau_j']) * d_j
         
         d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
         
-        spikes = (self.v > self.cfg['thresh']).float()
+        # --- ノイズの注入 ---
+        # 正規分布ノイズを生成して加算 (平均0, 標準偏差 noise_std)
+        noise = torch.randn_like(self.v) * self.cfg['noise_std']
+        
+        # 膜電位更新: ダイナミクス + 側抑制 + ノイズ
+        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+        if not self.is_data_layer:
+            self.v = self.v + lateral_inhibition # + noise
+
+        # 動的な閾値を用いた発火判定
+        effective_thresh = self.cfg['thresh'] + self.theta
+        spikes = (self.v > effective_thresh).float()
+        
         self.s = spikes
         self.v = self.v * (1 - spikes) 
         
+        # --- 発火時の閾値上昇 (Homeostasis) ---
+        self.theta = self.theta + (spikes * self.cfg['theta_plus'])
+
         if not self.is_data_layer:
             self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
 
@@ -107,6 +150,16 @@ class label_layer(nn.Module):
         self.x = None # Trace or Input
         self.j = None # Input Current State
         self.e_disc = None
+        
+        # 適応的閾値用の変数
+        self.theta = None
+        self.theta_tmp = None
+        
+        # 側抑制用の固定重み行列
+        w_inh_val = self.cfg['w_inh']
+        self.W_inh = torch.ones(output_dim, output_dim) * (-w_inh_val)
+        self.W_inh.fill_diagonal_(0.0)
+        self.W_inh = self.W_inh.to(self.cfg['device'])
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
@@ -114,11 +167,15 @@ class label_layer(nn.Module):
         self.x = torch.zeros(batch_size, self.dim, device=device)
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
+        
+        # 適応的閾値の初期化
+        self.theta = torch.zeros(batch_size, self.dim, device=device)
 
         if not self.is_training:
             self.v_tmp = torch.zeros(batch_size, self.dim, device=device)
             self.s_tmp = torch.zeros(batch_size, self.dim, device=device)
             self.j_tmp = torch.zeros(batch_size, self.dim, device=device)
+            self.theta_tmp = torch.zeros(batch_size, self.dim, device=device)
 
     def switch2training_mode(self):
         self.is_training = True
@@ -128,28 +185,66 @@ class label_layer(nn.Module):
 
     def update_state(self, input2main, input2tmp=None):
         dt = self.cfg['dt']
+        
+        # --- 減衰係数の計算 (共通) ---
+        decay_factor = torch.exp(torch.tensor(-dt / self.cfg['tau_theta'], device=self.theta.device))
 
+        # ==========================================
+        # 1. Tmp Dynamics
+        # ==========================================
         if not self.is_training:
+            lateral_inhibition_tmp = torch.matmul(self.s_tmp, self.W_inh.t())
+
+            self.theta_tmp = self.theta_tmp * decay_factor
+            effective_thresh_tmp = self.cfg['thresh'] + self.theta_tmp
+
             d_j_tmp = (-self.cfg['kappa_j'] * self.j_tmp + input2tmp)
             self.j_tmp = self.j_tmp + (dt / self.cfg['tau_j']) * d_j_tmp
             
             d_v_tmp = (-self.cfg['gamma_m'] * self.v_tmp + self.cfg['R_m'] * self.j_tmp)
-            self.v_tmp = self.v_tmp + (dt / self.cfg['tau_m']) * d_v_tmp
             
-            spikes_tmp = (self.v_tmp > self.cfg['thresh']).float()
+            # --- ノイズの注入 (Tmp) ---
+            noise_tmp = torch.randn_like(self.v_tmp) * self.cfg['noise_std']
+            
+            self.v_tmp = self.v_tmp + (dt / self.cfg['tau_m']) * d_v_tmp
+            # 側抑制 + ノイズ
+            self.v_tmp = self.v_tmp + lateral_inhibition_tmp + noise_tmp
+
+            spikes_tmp = (self.v_tmp > effective_thresh_tmp).float()
             self.s_tmp = spikes_tmp
             self.v_tmp = self.v_tmp * (1 - spikes_tmp)
+
+            self.theta_tmp = self.theta_tmp + (spikes_tmp * self.cfg['theta_plus'])
+        
+        # ==========================================
+        # 2. Main Dynamics
+        # ==========================================
+        
+        lateral_inhibition = torch.matmul(self.s, self.W_inh.t())
+
+        self.theta = self.theta * decay_factor
+        effective_thresh = self.cfg['thresh'] + self.theta
         
         # LIF Dynamics
         d_j = (-self.cfg['kappa_j'] * self.j + input2main)
         self.j = self.j + (dt / self.cfg['tau_j']) * d_j
         
         d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
         
-        spikes = (self.v > self.cfg['thresh']).float()
+        # --- ノイズの注入 (Main) ---
+        noise = torch.randn_like(self.v) * self.cfg['noise_std']
+        
+        self.v = self.v + (dt / self.cfg['tau_m']) * d_v
+        # 側抑制 + ノイズ
+        self.v = self.v + lateral_inhibition + noise
+        
+        # 動的閾値判定
+        spikes = (self.v > effective_thresh).float()
         self.s = spikes
         self.v = self.v * (1 - spikes)
+
+        # --- 発火時の閾値上昇 ---
+        self.theta = self.theta + (spikes * self.cfg['theta_plus'])
 
 
 class bPC_SNN(nn.Module):
@@ -175,9 +270,12 @@ class bPC_SNN(nn.Module):
         for i in range(len(layer_sizes) - 1):
             dim_lower = layer_sizes[i]
             dim_upper = layer_sizes[i+1]
-            # Xavier Uniform or Small Random
-            self.W.append(nn.Parameter(torch.randn(dim_lower, dim_upper) * 0.5))
-            self.V.append(nn.Parameter(torch.randn(dim_upper, dim_lower) * 0.5))
+            
+            # Xavier Initialization
+            std_dev = 1.0 / math.sqrt(dim_lower)
+            
+            self.W.append(nn.Parameter(torch.randn(dim_lower, dim_upper) * std_dev))
+            self.V.append(nn.Parameter(torch.randn(dim_upper, dim_lower) * std_dev))
 
     def reset_state(self, batch_size, device):
         for layer in self.layers:
@@ -384,7 +482,7 @@ def run_experiment(dataset_name='MNIST'):
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
-    layer_sizes = [784, 1000, 1000, 10]
+    layer_sizes = [784, 500, 500, 10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
@@ -422,7 +520,7 @@ def run_experiment(dataset_name='MNIST'):
                 if batch_idx % 100 == 0:
                     # print(sum_out_spikes)
                     print(f"Epoch {epoch} | Batch {batch_idx}")
-                    print(model.layers[-1].e_disc)
+                    print(sum_out_spikes)
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
@@ -436,7 +534,7 @@ def run_experiment(dataset_name='MNIST'):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
                 spike_in = spikegen.rate(imgs_rate, steps)
-                # spike_in = generate_poisson_spikes(imgs_rate,steps,CONFIG)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 sum_out_spikes = 0
