@@ -11,7 +11,7 @@ from datetime import datetime
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
     'dt' : 0.25,
-    'T_st' : 25.0, # データ提示時間
+    'T_st' : 200.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -20,8 +20,8 @@ CONFIG = {
     'gamma_m': 1.0,
     'R_m' : 1.0,
     'alpha_u' : 0.0005,   # 学習率
-    'alpha_gen' : 1.0,  # 予測誤差の重み
-    'alpha_disc' : 1.0,
+    'alpha_gen' : 0.5,  # 予測誤差の重み
+    'alpha_disc' : 0.5,
     'thresh': 0.4,
     'batch_size': 64,
     'epochs': 10,
@@ -384,7 +384,7 @@ def run_experiment(dataset_name='MNIST'):
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
-    layer_sizes = [784, 500, 500, 10]
+    layer_sizes = [784, 1000, 1000, 10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
