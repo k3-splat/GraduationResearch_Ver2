@@ -422,6 +422,7 @@ def run_experiment(dataset_name='MNIST'):
                 if batch_idx % 100 == 0:
                     # print(sum_out_spikes)
                     print(f"Epoch {epoch} | Batch {batch_idx}")
+                    print(model.layers[-1].e_disc)
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")

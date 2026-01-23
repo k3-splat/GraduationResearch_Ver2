@@ -309,13 +309,14 @@ def run_experiment(dataset_name='MNIST'):
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
                 # Training Loop
-                for t in range(steps):
+                for _ in range(steps):
                     model.forward_dynamics(x_data=imgs_rate, y_target=targets)
                     model.manual_weight_update(x_data=imgs_rate, y_target=targets)
                     model.clip_weights(20.0)
                 
                 if batch_idx % 100 == 0:
                     print(f"Epoch {epoch} | Batch {batch_idx}")
+                    print(model.layers[-1].e_disc)
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
