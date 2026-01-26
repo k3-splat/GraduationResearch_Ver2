@@ -1,0 +1,2 @@
+dataset,epoch,test_acc,time
+MNIST,0,32.36177884615385,451.32806634902954

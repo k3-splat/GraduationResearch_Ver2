@@ -104,14 +104,12 @@ class label_layer(nn.Module):
 
         self.v = None
         self.s = None
-        self.x = None # Trace or Input
         self.j = None # Input Current State
         self.e_disc = None
 
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
         self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
 
@@ -176,8 +174,15 @@ class bPC_SNN(nn.Module):
             dim_lower = layer_sizes[i]
             dim_upper = layer_sizes[i+1]
             # Xavier Uniform or Small Random
-            self.W.append(nn.Parameter(torch.randn(dim_lower, dim_upper) * 0.5))
-            self.V.append(nn.Parameter(torch.randn(dim_upper, dim_lower) * 0.5))
+            w = nn.Parameter(torch.empty(dim_lower, dim_upper))
+            v = nn.Parameter(torch.empty(dim_upper, dim_lower))
+            
+            # Xavier Initialization
+            nn.init.xavier_uniform_(w)
+            nn.init.xavier_uniform_(v)
+            
+            self.W.append(w)
+            self.V.append(v)
 
     def reset_state(self, batch_size, device):
         for layer in self.layers:
@@ -198,10 +203,11 @@ class bPC_SNN(nn.Module):
         """
         # 入力データ(Rate/Intensity)を最初のスパイク入力とみなしてスタート
         # Layer 0はData Layerなので内部状態の更新対象ではないが、sweepの起点となる
-        current_input = x_data 
+        current_input = x_data
+        l = len(self.layers) - 1 if is_Testing else len(self.layers)
 
         # 学習時
-        for i in range(1, len(self.layers) - 1):
+        for i in range(1, l):
             layer = self.layers[i]
             
             # Bottom-up入力の計算: 前の層の出力(current_input) x V
@@ -235,7 +241,7 @@ class bPC_SNN(nn.Module):
             # Bottom-up入力の計算: 前の層の出力(current_input) x V
             # self.V[i-1] は Layer i と Layer i-1 を結ぶ Bottom-up 重み
             # Vのshapeは (dim_upper, dim_lower) なので、 input @ V.t() で (Batch, dim_upper)
-            weight = self.V[-2]
+            weight = self.V[-1]
             input_signal = torch.matmul(current_input, weight.t())
 
             layer.j_tmp = input_signal
@@ -462,6 +468,10 @@ def run_experiment(dataset_name='MNIST'):
             # --- Training ---
             model.train()
             epoch_start = time.time()
+
+            # Epoch全体の集計変数をループの外で初期化
+            train_epoch_correct = 0
+            train_epoch_samples = 0
             
             for batch_idx, (imgs, lbls) in enumerate(train_l):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
@@ -478,7 +488,7 @@ def run_experiment(dataset_name='MNIST'):
                 
                 # --- 追加: Feedforward Initialization ---
                 # 各バッチの開始時に、フィードフォワードスイープによる初期化を実行
-                # model.run_feedforward_initialization(spike_in[0])
+                model.run_feedforward_initialization(spike_in[0])
                 # -------------------------------------
                 
                 sum_out_spikes = 0
@@ -490,10 +500,19 @@ def run_experiment(dataset_name='MNIST'):
                     model.manual_weight_update(x_data=x_t, y_target=targets)
                     model.clip_weights(20.0)
                     sum_out_spikes += model.layers[-1].s
+
+                _, pred = torch.max(sum_out_spikes, 1)
                 
+                # Batch精度とEpoch精度の集計
+                correct_count = (pred == lbls).sum().item()
+                
+                train_epoch_correct += correct_count
+                train_epoch_samples += lbls.size(0)
+                
+                # 進捗表示用: 【修正】ここまでの累積精度を表示
                 if batch_idx % 100 == 0:
-                    # print(sum_out_spikes)
-                    print(f"Epoch {epoch} | Batch {batch_idx}")
+                    current_cum_acc = 100 * train_epoch_correct / train_epoch_samples
+                    print(f"Epoch {epoch} | Batch {batch_idx} | Cumulative Train Acc: {current_cum_acc:.2f}%")
         
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
@@ -513,7 +532,7 @@ def run_experiment(dataset_name='MNIST'):
                 
                 # --- 追加: Feedforward Initialization ---
                 # テスト時も同様に初期化を実行
-                # model.run_feedforward_initialization(spike_in[0])
+                model.run_feedforward_initialization(spike_in[0], is_Testing=True)
                 # -------------------------------------
 
                 sum_out_spikes = 0
