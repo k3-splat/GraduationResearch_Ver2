@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import snntorch.spikegen as spikegen
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset # Subsetを追加
 import time
 import pandas as pd
 import os
@@ -11,25 +11,44 @@ import os
 # Fashion MNISTで安定した設定を採用
 CONFIG = {
     'dt': 0.25,
-    'tau_m': 25.0,
+    'tau_m': 20.0,
     'tau_j': 10.0,
     'tau_tr': 30.0,
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m': 1.0,
     'alpha_gen': 1.0,    # 生成（画像再構成）の誤差係数
-    'alpha_u': 0.0005,   # 重み学習率 (安定化のため低減済み)
-    'beta': 0.05,        # 誤差重み学習率 (安定化のため低減済み)
+    'alpha_u': 0.055,   # 重み学習率 (安定化のため低減済み)
+    'beta': 1.0,        # 誤差重み学習率 (安定化のため低減済み)
     'thresh': 0.4,       # 発火閾値
-    'num_steps': 100,    # 推論ステップ数
-    'batch_size': 64,
+    'num_steps': 800,    # 推論ステップ数
+    'batch_size': 1,
     'epochs': 10,        # 学習エポック数
+    'max_freq' : 63.75,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/SpNCN_Comparison' # 結果保存先
 }
 
 # 結果保存用ディレクトリ作成
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
+
+def generate_poisson_spikes(data, num_steps, config):
+    """
+    入力データ(0~1)を受け取り、ポアソンスパイク列(Time, Batch, Dim)を生成する
+    """
+    batch_size, dim = data.shape
+    
+    dt = config['dt']
+    max_freq = config['max_freq']
+    
+    # 確率 p = freq(Hz) * dt(ms) / 1000
+    firing_probs = data * max_freq * (dt / 1000.0)
+    firing_probs = torch.clamp(firing_probs, 0.0, 1.0)
+    
+    firing_probs_expanded = firing_probs.unsqueeze(0).expand(num_steps, batch_size, dim)
+    spikes = torch.bernoulli(firing_probs_expanded)
+    
+    return spikes
 
 class SpNCNLayer(nn.Module):
     def __init__(self, idx, output_dim, config, is_data_layer=False):
@@ -224,13 +243,21 @@ def run_experiment(dataset_name='MNIST'):
     else:
         raise ValueError("Unknown dataset")
 
+    # ========================================================
+    # 修正箇所: データを10個だけに制限する処理
+    # ========================================================
+    print(f"!!! {dataset_name}: 使用データを先頭10個に制限します !!!")
+    train_d = Subset(train_d, range(10))
+    test_d = Subset(test_d, range(10))
+    # ========================================================
+
     # DataLoader
     train_l = DataLoader(train_d, batch_size=CONFIG['batch_size'], shuffle=True, drop_last=True)
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
     model = SpNCN(
-        hidden_sizes=[500, 500], 
+        hidden_sizes=[3000, 3000, 3000], 
         input_size=784, 
         label_size=10, 
         config=CONFIG
@@ -255,7 +282,7 @@ def run_experiment(dataset_name='MNIST'):
                 targets.scatter_(1, lbls.view(-1, 1), 1)
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
+                spike_in = generate_poisson_spikes(imgs_rate, num_steps=CONFIG['num_steps'], config=CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 out_spikes = 0
@@ -272,8 +299,10 @@ def run_experiment(dataset_name='MNIST'):
                 train_correct += (pred == lbls).sum().item()
                 train_samples += lbls.size(0)
                 
-                if batch_idx % 200 == 0:
+                # ログ出力頻度調整（データが少ないので毎回出ても良いが、念のため残す）
+                if batch_idx % 1 == 0:
                     print(f"Epoch {epoch} | Batch {batch_idx} | Train Acc: {100*train_correct/train_samples:.2f}%")
+                    print(out_spikes) # 冗長な出力は抑制してもよい
 
             train_acc = 100 * train_correct / train_samples
             epoch_synops = model.total_synops - start_synops
@@ -290,7 +319,7 @@ def run_experiment(dataset_name='MNIST'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = spikegen.rate(imgs_rate, num_steps=CONFIG['num_steps'])
+                spike_in = generate_poisson_spikes(imgs_rate, num_steps=CONFIG['num_steps'], config=CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 out_spikes = 0

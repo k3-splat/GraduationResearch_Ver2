@@ -10,8 +10,8 @@ from datetime import datetime
 
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
-    'dt' : 1.0,
-    'T_st' : 8.0, # データ提示時間
+    'dt' : 1,
+    'T_st' : 100.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
@@ -19,7 +19,7 @@ CONFIG = {
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m' : 1.0,
-    'alpha_u' : 0.001,   # 学習率
+    'alpha_u' : 0.05,   # 学習率
     'alpha_gen' : 1.0,  # 予測誤差の重み
     'alpha_disc' : 1.0,
     'thresh': 0.4,
@@ -27,7 +27,7 @@ CONFIG = {
     'epochs': 10,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/bPC_SNN',
-    'max_freq': 255.0
+    'max_freq': 3000.0   # 【修正】追加: ポアソン生成用の最大周波数(Hz)
 }
 
 os.makedirs(CONFIG['save_dir'], exist_ok=True)
@@ -51,8 +51,9 @@ def generate_poisson_spikes(data, num_steps, config):
     return spikes
 
 class bPC_SNNLayer(nn.Module):
-    def __init__(self, output_dim, config):
+    def __init__(self, idx, output_dim, config):
         super().__init__()
+        self.idx = idx
         self.dim = output_dim
         self.cfg = config
         
@@ -60,7 +61,6 @@ class bPC_SNNLayer(nn.Module):
         self.v = None
         self.s = None
         self.x = None # Trace or Input
-        self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
 
@@ -68,104 +68,21 @@ class bPC_SNNLayer(nn.Module):
         self.v = torch.zeros(batch_size, self.dim, device=device)
         self.s = torch.zeros(batch_size, self.dim, device=device)
         self.x = torch.zeros(batch_size, self.dim, device=device)
-        self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
-
-    def switch_Testing_mode(self):
-        # データ層（固定）と学習層（更新あり）を切り替えるトグル
-        self.is_data_layer = not self.is_data_layer
 
     def update_state(self, total_input_current):
         dt = self.cfg['dt']
         
         # LIF Dynamics
-        d_j = (-self.cfg['kappa_j'] * self.j + total_input_current)
-        self.j = self.j + (dt / self.cfg['tau_j']) * d_j
-        
-        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
+        d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * total_input_current)
         self.v = self.v + (dt / self.cfg['tau_m']) * d_v
         
         spikes = (self.v > self.cfg['thresh']).float()
         self.s = spikes
         self.v = self.v * (1 - spikes) 
-        
-        # Traceの更新
+
         self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
-
-
-class InputLayer(nn.Module):
-    def __init__(self, output_dim, config):
-        super().__init__()
-        self.dim = output_dim
-        self.config = config
-
-        self.s = None
-        self.x = None
-        self.e_gen = None
-
-    def init_state(self, batch_size, device):
-        self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
-        self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
-
-    def update_state(self, poisson_spikes):
-        self.s = poisson_spikes
-        self.x += (-self.x / self.config['tau_data'] + poisson_spikes)
-
-
-class bPC_labelLayer(nn.Module):
-    def __init__(self, output_dim, config):
-        super().__init__()
-        self.dim = output_dim
-        self.cfg = config
-        self.is_Training = True
-        
-        # 内部状態
-        self.s_label = None
-        self.x_label = None
-
-        self.v = None
-        self.s = None
-        self.x = None # Trace or Input
-        self.j = None # Input Current State
-        self.e_gen = None
-        self.e_disc = None
-
-    def init_state(self, batch_size, device):
-        self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
-        self.e_disc = torch.zeros(batch_size, self.dim, device=device)
-
-        if not self.is_Training:
-            self.j = torch.zeros(batch_size, self.dim, device=device)
-            self.v = torch.zeros(batch_size, self.dim, device=device)
-
-    def switch_mode(self):
-        # データ層（固定）と学習層（更新あり）を切り替えるトグル
-        self.is_Training = not self.is_Training
-
-    def update_state(self, inputs):
-        if self.is_Training:
-            self.s = inputs
-            self.x += (-self.x / self.cfg['tau_data'] + inputs)
-
-        else:
-            dt = self.cfg['dt']
-            
-            # LIF Dynamics
-            d_j = (-self.cfg['kappa_j'] * self.j + inputs)
-            self.j = self.j + (dt / self.cfg['tau_j']) * d_j
-            
-            d_v = (-self.cfg['gamma_m'] * self.v + self.cfg['R_m'] * self.j)
-            self.v = self.v + (dt / self.cfg['tau_m']) * d_v
-            
-            spikes = (self.v > self.cfg['thresh']).float()
-            self.s = spikes
-            self.v = self.v * (1 - spikes) 
-            
-            # Traceの更新
-            self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
 
 
 class bPC_SNN(nn.Module):
@@ -177,12 +94,7 @@ class bPC_SNN(nn.Module):
 
         # レイヤー生成
         for i, size in enumerate(layer_sizes):
-            if i == 0:
-                self.layers.append(InputLayer(output_dim=size, config=config))
-            elif i == len(layer_sizes) - 1:
-                self.layers.append(bPC_labelLayer(output_dim=size, config=config))
-            else:
-                self.layers.append(bPC_SNNLayer(output_dim=size, config=config))
+            self.layers.append(bPC_SNNLayer(idx=i, output_dim=size, config=config))
             
         # --- 重み定義 ---
         self.W = nn.ParameterList() # Top-down (Upper -> Lower) [Generative]
@@ -192,6 +104,7 @@ class bPC_SNN(nn.Module):
         for i in range(len(layer_sizes) - 1):
             dim_lower = layer_sizes[i]
             dim_upper = layer_sizes[i+1]
+            # Xavier Uniform or Small Random
             # Xavier Uniform or Small Random
             w = nn.Parameter(torch.empty(dim_lower, dim_upper))
             v = nn.Parameter(torch.empty(dim_upper, dim_lower))
@@ -291,7 +204,7 @@ class bPC_SNN(nn.Module):
                     z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
                     layer.e_disc = alpha_disc * (layer.x - z_disc_pred)
 
-    def manual_weight_update(self):
+    def manual_weight_update(self, x_data, y_target=None):
         """
         ST-LRA Update Rule
         """
@@ -301,17 +214,26 @@ class bPC_SNN(nn.Module):
             # Vの更新 (Discriminative weights)
             if i < len(self.layers) - 1:
                 e_disc_upper = self.layers[i+1].e_disc
-                s_own = self.layers[i].s
-                grad_V = torch.matmul(e_disc_upper.t(), s_own)
+                if i == 0:
+                    grad_V = torch.matmul(e_disc_upper.t(), x_data)
+                else:
+                    s_own = self.layers[i].s
+                    grad_V = torch.matmul(e_disc_upper.t(), s_own)
+
                 self.V[i] += alpha_u * grad_V
 
             # Wの更新 (Generative weights)
             if i > 0:
                 e_gen_lower = self.layers[i-1].e_gen
-                s_own = self.layers[i].s
-                grad_W = torch.matmul(e_gen_lower.t(), s_own)
-                self.W[i-1] += alpha_u * grad_W
-
+                
+                if i == len(self.layers) - 1:
+                    if y_target is not None:
+                        grad_W = torch.matmul(e_gen_lower.t(), y_target)
+                        self.W[i-1] += alpha_u * grad_W
+                else:
+                    s_own = self.layers[i].s
+                    grad_W = torch.matmul(e_gen_lower.t(), s_own)
+                    self.W[i-1] += alpha_u * grad_W
 
 def run_experiment(dataset_name='MNIST'):
     print(f"\n=== Running bPC-SNN on {dataset_name} ===")
@@ -327,7 +249,7 @@ def run_experiment(dataset_name='MNIST'):
     print(f"Results will be saved to: {save_file_path}")
     # ----------------------------
 
-    transform = transforms.Compose([
+    transform=transforms.Compose([
         transforms.ToTensor(),
         transforms.Lambda(lambda x: torch.flatten(x))
     ])
@@ -344,7 +266,6 @@ def run_experiment(dataset_name='MNIST'):
     train_l = DataLoader(train_d, batch_size=CONFIG['batch_size'], shuffle=True, drop_last=True)
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
-    # モデル構築
     layer_sizes = [784, 500, 500, 10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
@@ -357,31 +278,52 @@ def run_experiment(dataset_name='MNIST'):
             model.train()
             epoch_start = time.time()
             
+            # Epoch全体の集計変数をループの外で初期化
+            train_epoch_correct = 0
+            train_epoch_samples = 0
+            
             for batch_idx, (imgs, lbls) in enumerate(train_l):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 
-                # One-hotターゲット
                 targets = torch.zeros(imgs.size(0), 10).to(CONFIG['device'])
                 targets.scatter_(1, lbls.view(-1, 1), 1)
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
-                spike_label = generate_poisson_spikes(targets, steps, CONFIG)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                # spike_out = generate_poisson_spikes(targets, steps, CONFIG)
+                
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
-                # Training Loop
-                for t in range(steps):
-                    model.forward_dynamics(x_data=spike_in[t], y_target=spike_label[t])
-                    model.manual_weight_update()
-                    model.clip_weights(20.0)
+                sum_out_spikes = 0
                 
+                for t in range(steps):
+                    x_t = imgs_rate
+                    
+                    model.forward_dynamics(x_data=x_t, y_target=targets)
+                    model.manual_weight_update(x_data=x_t, y_target=targets)
+                    model.clip_weights(20.0)
+                    sum_out_spikes += model.layers[-1].s
+                
+                _, pred = torch.max(sum_out_spikes, 1)
+                
+                # Batch精度とEpoch精度の集計
+                correct_count = (pred == lbls).sum().item()
+                
+                train_epoch_correct += correct_count
+                train_epoch_samples += lbls.size(0)
+                
+                # 進捗表示用: 【修正】ここまでの累積精度を表示
                 if batch_idx % 100 == 0:
-                    print(f"Epoch {epoch} | Batch {batch_idx}")
+                    current_cum_acc = 100 * train_epoch_correct / train_epoch_samples
+                    print(f"Epoch {epoch} | Batch {batch_idx} | Cumulative Train Acc: {current_cum_acc:.2f}%")
         
+            # Epoch終了時の最終Train Accuracy
+            train_acc = 100 * train_epoch_correct / train_epoch_samples
+            for i in range(len(model.layers) - 1):
+                print(model.W[i])
+
             # --- Testing ---
             print("Switching label layer to Inference Mode (LIF)...")
-            # ラベル層を学習モード(固定)から推論モード(LIF更新)へ切り替え
-            model.layers[-1].switch_mode()
 
             model.eval()
             test_correct = 0
@@ -390,29 +332,32 @@ def run_experiment(dataset_name='MNIST'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                # spike_in = spikegen.rate(imgs_rate, steps)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                
                 model.reset_state(imgs.size(0), CONFIG['device'])
+                sum_out_spikes = 0
                 
-                for t in range(steps):
-                    model.forward_dynamics(x_data=spike_in[t], y_target=None)
+                for _ in range(steps):
+                    x_t = imgs_rate
+                    model.forward_dynamics(x_data=x_t, y_target=None)
+                    sum_out_spikes += model.layers[-1].s
                 
-                _, pred = torch.max(model.layers[-1].s, 1)
-                
+                _, pred = torch.max(sum_out_spikes, 1)
                 test_correct += (pred == lbls).sum().item()
                 test_samples += lbls.size(0)
                 
             test_acc = 100 * test_correct / test_samples
             epoch_time = time.time() - epoch_start
             
-            print(f"Epoch {epoch} DONE | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
+            print(f"Epoch {epoch} DONE | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}% | Time: {epoch_time:.1f}s")
             
             print("Switching label layer back to Training Mode (Clamp)...")
-            # ラベル層を推論モードから学習モード(固定)へ戻す
-            model.layers[-1].switch_mode()
 
             logs.append({
                 'dataset': dataset_name,
                 'epoch': epoch,
+                'train_acc': train_acc,
                 'test_acc': test_acc,
                 'time': epoch_time
             })
