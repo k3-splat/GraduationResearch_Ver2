@@ -384,7 +384,7 @@ def run_experiment(dataset_name='MNIST'):
     test_l = DataLoader(test_d, batch_size=CONFIG['batch_size'], shuffle=False, drop_last=True)
     
     # モデル構築
-    layer_sizes = [784, 1000, 1000, 10]
+    layer_sizes = [784, 500, 500, 500,  10]
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
