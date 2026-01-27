@@ -379,7 +379,7 @@ class DiffPCNetworkTorch(nn.Module):
         self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, e_in[0],
                                sample_step_override=t)
         for i, lyr in enumerate(self.layers):
-            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i],
+            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i+1],
                      sample_step_override=t)
         
         self._global_step += 1

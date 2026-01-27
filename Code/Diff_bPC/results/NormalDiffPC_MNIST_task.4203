@@ -1,0 +1,26 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py:560: UserWarning: This DataLoader will create 2 worker processes in total. Our suggested max number of worker in current system is 1, which is smaller than what this DataLoader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker number to avoid potential slowness/freeze if necessary.
+  warnings.warn(_create_warning_msg(
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Traceback (most recent call last):
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Diff_bPC/Normal_DiffPC.py", line 715, in <module>
+    main(cfg)
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Diff_bPC/Normal_DiffPC.py", line 604, in main
+    _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Diff_bPC/Normal_DiffPC.py", line 444, in run_batch_two_phase
+    for _ in range(steps_phase1): net.one_time_step()
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Diff_bPC/Normal_DiffPC.py", line 382, in one_time_step
+    lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i],
+  File "/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Diff_bPC/Normal_DiffPC.py", line 189, in step
+    self.e_in_data.add_(e_in_recv.to(self.device) * l_t_prev)
+RuntimeError: The size of tensor a (400) must match the size of tensor b (784) at non-singleton dimension 1

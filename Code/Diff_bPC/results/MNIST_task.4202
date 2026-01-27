@@ -1,0 +1,20 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+/home/st6322045/anaconda3/envs/bPC_SNN/lib/python3.9/site-packages/torch/utils/data/dataloader.py:560: UserWarning: This DataLoader will create 2 worker processes in total. Our suggested max number of worker in current system is 1, which is smaller than what this DataLoader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker number to avoid potential slowness/freeze if necessary.
+  warnings.warn(_create_warning_msg(
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Epoch 01: train acc 85.02% | test acc 90.57% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.66, s_e_disc=0.00, s_e_gen=0.00
+Epoch 02: train acc 90.02% | test acc 93.80% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.66, s_e_disc=0.00, s_e_gen=0.00
+Epoch 03: train acc 92.14% | test acc 94.70% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.67, s_e_disc=0.00, s_e_gen=0.00
+Epoch 04: train acc 92.97% | test acc 95.80% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.69, s_e_disc=0.00, s_e_gen=0.00
+Epoch 05: train acc 93.78% | test acc 96.20% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.72, s_e_disc=0.00, s_e_gen=0.00
+Epoch 06: train acc 94.17% | test acc 96.06% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.73, s_e_disc=0.00, s_e_gen=0.00
+Epoch 07: train acc 94.60% | test acc 96.45% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.76, s_e_disc=0.00, s_e_gen=0.00
+Epoch 08: train acc 94.94% | test acc 96.80% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.77, s_e_disc=0.00, s_e_gen=0.00
+Epoch 09: train acc 95.17% | test acc 96.74% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.80, s_e_disc=0.00, s_e_gen=0.00
+Epoch 10: train acc 95.38% | test acc 96.88% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=1.81, s_e_disc=0.00, s_e_gen=0.00
+
+Run complete. Results saved to runs/mnist_400h.json
