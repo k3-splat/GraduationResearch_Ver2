@@ -350,8 +350,8 @@ class DiffPCNetworkTorch(nn.Module):
             if l < len(self.W) - 1:
                 prev_s_gen = self.layers[l+1].s_A_prev
 
-        for l in range(len(self.layers) + 1):
-            if l < len(self.layers):
+        for l in range(len(self.cfg.layer_dims)):
+            if l < len(self.cfg.layer_dims) - 1:
                 e_in_disc_l = self.layers[l].s_e_disc_prev @ self.W[l]
                 if l == 0:
                     e_in_gen_l = self.input_driver.s_e_gen_prev @ self.V[l]
@@ -359,7 +359,7 @@ class DiffPCNetworkTorch(nn.Module):
                     e_in_gen_l = self.layers[l-1].s_e_gen_prev @ self.V[l]
 
             else:
-                e_in_disc_l = torch.zeros_like(self.layers[l].s_e_disc_prev)
+                e_in_disc_l = torch.zeros_like(self.layers[l-1].s_e_disc_prev)
 
             e_in_disc.append(e_in_disc_l)
             e_in_gen.append(e_in_gen_l)
