@@ -1,0 +1,2 @@
+dataset,epoch,train_acc,test_acc,time
+MNIST,0,97.4786552828175,9.805689102564102,2326.0363426208496

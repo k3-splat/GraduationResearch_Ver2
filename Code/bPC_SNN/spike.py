@@ -10,16 +10,16 @@ from datetime import datetime
 
 # --- ハイパーパラメータ設定 ---
 CONFIG = {
-    'dt' : 1.0,
-    'T_st' : 8.0, # データ提示時間
+    'dt' : 0.25,
+    'T_st' : 25.0, # データ提示時間
     'tau_j' : 10.0,
     'tau_m' : 20.0,
     'tau_tr' : 30.0,
-    'tau_data' : 30.0,
+    'tau_data' : 100.0,
     'kappa_j': 0.25,
     'gamma_m': 1.0,
     'R_m' : 1.0,
-    'alpha_u' : 0.001,   # 学習率
+    'alpha_u' : 0.0005,   # 学習率
     'alpha_gen' : 1.0,  # 予測誤差の重み
     'alpha_disc' : 1.0,
     'thresh': 0.4,
@@ -59,7 +59,6 @@ class bPC_SNNLayer(nn.Module):
         # 内部状態
         self.v = None
         self.s = None
-        self.x = None # Trace or Input
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
@@ -67,7 +66,6 @@ class bPC_SNNLayer(nn.Module):
     def init_state(self, batch_size, device):
         self.v = torch.zeros(batch_size, self.dim, device=device)
         self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
         self.j = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
@@ -89,9 +87,6 @@ class bPC_SNNLayer(nn.Module):
         spikes = (self.v > self.cfg['thresh']).float()
         self.s = spikes
         self.v = self.v * (1 - spikes) 
-        
-        # Traceの更新
-        self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
 
 
 class InputLayer(nn.Module):
@@ -101,17 +96,14 @@ class InputLayer(nn.Module):
         self.config = config
 
         self.s = None
-        self.x = None
         self.e_gen = None
 
     def init_state(self, batch_size, device):
         self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
         self.e_gen = torch.zeros(batch_size, self.dim, device=device) 
 
     def update_state(self, poisson_spikes):
         self.s = poisson_spikes
-        self.x += (-self.x / self.config['tau_data'] + poisson_spikes)
 
 
 class bPC_labelLayer(nn.Module):
@@ -120,21 +112,15 @@ class bPC_labelLayer(nn.Module):
         self.dim = output_dim
         self.cfg = config
         self.is_Training = True
-        
-        # 内部状態
-        self.s_label = None
-        self.x_label = None
 
         self.v = None
         self.s = None
-        self.x = None # Trace or Input
         self.j = None # Input Current State
         self.e_gen = None
         self.e_disc = None
 
     def init_state(self, batch_size, device):
         self.s = torch.zeros(batch_size, self.dim, device=device)
-        self.x = torch.zeros(batch_size, self.dim, device=device)
         self.e_disc = torch.zeros(batch_size, self.dim, device=device)
 
         if not self.is_Training:
@@ -148,7 +134,6 @@ class bPC_labelLayer(nn.Module):
     def update_state(self, inputs):
         if self.is_Training:
             self.s = inputs
-            self.x += (-self.x / self.cfg['tau_data'] + inputs)
 
         else:
             dt = self.cfg['dt']
@@ -163,9 +148,6 @@ class bPC_labelLayer(nn.Module):
             spikes = (self.v > self.cfg['thresh']).float()
             self.s = spikes
             self.v = self.v * (1 - spikes) 
-            
-            # Traceの更新
-            self.x = self.x + (-self.x / self.cfg['tau_tr'] + spikes)
 
 
 class bPC_SNN(nn.Module):
@@ -249,12 +231,12 @@ class bPC_SNN(nn.Module):
                 if i < len(self.layers) - 1:
                     s_upper = self.layers[i+1].s
                     z_gen_pred = torch.matmul(s_upper, self.W[i].t())
-                    layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
+                    layer.e_gen = alpha_gen * (layer.s - z_gen_pred)
 
                 if i > 0:
                     s_lower = self.layers[i-1].s
                     z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
-                    layer.e_disc = alpha_disc * (layer.x - z_disc_pred)
+                    layer.e_disc = alpha_disc * (layer.s - z_disc_pred)
 
         # テスト時
         else:
@@ -284,12 +266,12 @@ class bPC_SNN(nn.Module):
                 if i < len(self.layers) - 1:
                     s_upper = self.layers[i+1].s
                     z_gen_pred = torch.matmul(s_upper, self.W[i].t())
-                    layer.e_gen = alpha_gen * (layer.x - z_gen_pred)
+                    layer.e_gen = alpha_gen * (layer.s - z_gen_pred)
 
                 if i > 0:
                     s_lower = self.layers[i-1].s
                     z_disc_pred = torch.matmul(s_lower, self.V[i-1].t())
-                    layer.e_disc = alpha_disc * (layer.x - z_disc_pred)
+                    layer.e_disc = alpha_disc * (layer.s - z_disc_pred)
 
     def manual_weight_update(self):
         """
@@ -365,13 +347,14 @@ def run_experiment(dataset_name='MNIST'):
                 targets.scatter_(1, lbls.view(-1, 1), 1)
                 
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
-                spike_label = generate_poisson_spikes(targets, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate, steps)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                # spike_label = generate_poisson_spikes(targets, steps, CONFIG)
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
                 # Training Loop
                 for t in range(steps):
-                    model.forward_dynamics(x_data=spike_in[t], y_target=spike_label[t])
+                    model.forward_dynamics(x_data=spike_in[t], y_target=targets)
                     model.manual_weight_update()
                     model.clip_weights(20.0)
                 
@@ -390,7 +373,8 @@ def run_experiment(dataset_name='MNIST'):
             for imgs, lbls in test_l:
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
-                spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                spike_in = spikegen.rate(imgs_rate, steps)
+                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 
                 for t in range(steps):
