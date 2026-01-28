@@ -1,0 +1,31 @@
+Starting bPC Experiment. Logs will be saved to logs/bPC_log_20260128_174744.txt and logs/bPC_metrics_20260128_174744.csv
+
+Skipping Hyperparameter Search...
+
+============================================================
+PHASE 2: Final Training (Target Accuracy: 97.0% or Max Epochs: 25)
+Using Params: {'activation': 'leaky_relu', 'lr_activities': 0.05227544458892151, 'momentum': 0.9, 'lr_weights': 0.0004378647738806029, 'weight_decay': 0.002147533595886586, 'alpha_gen': 0.0001, 'alpha_disc': 1.0, 'T_train': 8, 'T_eval': 100}
+============================================================
+Epoch  | Test Acc   | G-FPO      | GB-Data    | W-Ent    | ID-L1   
+---------------------------------------------------------------------------
+1      | 95.58      | 3139.50    | 51.17      | 4.15     | 10.93   
+2      | 96.93      | 6279.00    | 102.34     | 4.15     | 9.55    
+3      | 96.77      | 9418.50    | 153.52     | 4.18     | 8.87    
+4      | 96.87      | 12558.00   | 204.69     | 4.23     | 11.72   
+5      | 97.30      | 15697.50   | 255.86     | 4.21     | 10.87   
+
+[Success] Accuracy reached 97.30% (>= 97.0%). Stopping training early.
+
+=== Final Report ===
+Stopped at Epoch 5 in 116.15 seconds.
+Final Accuracy: 97.30%
+Total Steps: 980
+Total FPO: 15697.5000 G
+Total Data Movement: 255.8584 GB
+Data saved to: logs/bPC_metrics_20260128_174744.csv
+
+============================================================
+PHASE 3: Generating Images from Labels (Fixed Label -> Update Image)
+============================================================
+Running inference generation (100 steps)...
+Generated images saved to: logs/generated_digits_20260128_174744.png
