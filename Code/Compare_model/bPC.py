@@ -35,7 +35,7 @@ class DualLogger:
 # =============================================================================
 COMMON_CONFIG = {
     'batch_size': 256,
-    'hidden_size': 500,
+    'hidden_size': 400,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     
     # -----------------------------------------------------------
@@ -108,7 +108,7 @@ class bPC_Net(nn.Module):
         self.layers = nn.ModuleList([
             bPC_Layer(784, hidden_size, act_name),
             bPC_Layer(hidden_size, hidden_size, act_name),
-            bPC_Layer(hidden_size, hidden_size, act_name),
+            # bPC_Layer(hidden_size, hidden_size, act_name),
             bPC_Layer(hidden_size, 10, act_name)
         ])
         
