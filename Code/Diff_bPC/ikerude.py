@@ -567,8 +567,8 @@ def main(cfg: DiffPCConfig):
         train_ds = datasets.MNIST("./data", train=True,  download=True, transform=train_transform)
         test_ds  = datasets.MNIST("./data", train=False, download=True, transform=test_transform)
     
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=0, pin_memory=True)
+    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     def to_vec(x: torch.Tensor) -> torch.Tensor:
         return x.view(x.size(0), -1).to(device)
