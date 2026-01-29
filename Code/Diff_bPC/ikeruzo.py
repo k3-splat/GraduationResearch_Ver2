@@ -497,6 +497,47 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     return net.layers[-1].x_T.clone(), spike_stats
 
 
+@torch.no_grad()
+def run_batch_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    lt_n = l_t_spec["args"]["n"]
+    steps_phase1 = cfg.t_init_cycles * lt_n
+    steps_phase2 = cfg.phase2_cycles * lt_n
+    
+    net.set_sampling_duration(steps_phase1 + steps_phase2)
+    net.reset_all_states(x.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+
+    # Phase-1
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase1)
+
+    net.set_training(False)                       # v2: no dropout in P1
+
+    net.set_clamp(0, True, x)
+    for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
+    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
+
+    # Phase-2 (continue state)
+    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
+    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase2)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps_phase2):
+        net.one_time_step(bottomup_mask=False, topdown_mask=False)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+    return net.layers[-1].x_T.clone(), spike_stats
+
+
 # =========================
 #  MNIST training wrapper
 # =========================
@@ -611,13 +652,13 @@ def main(cfg: DiffPCConfig):
 
         with torch.no_grad():
             for images, labels in train_loader:
-                logits, _ = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
+                logits, _ = run_batch_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 train_correct += (preds == labels).sum().item()
                 train_total   += labels.size(0)
 
             for images, labels in test_loader:
-                logits, stats = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
+                logits, stats = run_batch_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
