@@ -1,0 +1,7 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Traceback (most recent call last):
+  File "/home/st6322045/./GraduationResearch_Ver2/Code/Compare_model/bPC.py", line 14, in <module>
+    import matplotlib.pyplot as plt
+ModuleNotFoundError: No module named 'matplotlib'

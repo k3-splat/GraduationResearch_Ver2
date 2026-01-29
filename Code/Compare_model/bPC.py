@@ -403,7 +403,7 @@ def search_hyperparameters(train_loader, val_loader):
             # Combined Objective
             # Accuracyは大きいほど良いので (1 - acc/100) で最小化問題にする
             # RMSEは小さいほど良い
-            combined_loss = (1.0 - val_acc / 100.0) + val_rmse
+            combined_loss = 2 * (1.0 - val_acc / 100.0) + val_rmse
             
             trial.report(combined_loss, epoch)
             if trial.should_prune():
@@ -419,7 +419,7 @@ def search_hyperparameters(train_loader, val_loader):
     
     # ★探索結果のCSV保存
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    search_csv_path = f"logs/optuna_search_results_{timestamp}.csv"
+    search_csv_path = f"GraduationResearch_Ver2/Code/Compare_model/logs/optuna_search_results_{timestamp}.csv"
     study.trials_dataframe().to_csv(search_csv_path, index=False)
     print(f"\nAll hyperparameter search results saved to: {search_csv_path}")
     
@@ -578,9 +578,9 @@ def generate_images_from_labels(model, device, params, class_averages, save_path
 if __name__ == "__main__":
     if not os.path.exists('logs'): os.makedirs('logs')
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/bPC_log_{timestamp}.txt"
-    csv_file = f"logs/bPC_metrics_{timestamp}.csv"
-    gen_img_file = f"logs/generated_digits_{timestamp}.png"
+    log_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/bPC_log_{timestamp}.txt"
+    csv_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/bPC_metrics_{timestamp}.csv"
+    gen_img_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/generated_digits_{timestamp}.png"
     
     sys.stdout = DualLogger(log_file)
     print(f"Starting bPC Experiment.")
