@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-import matplotlib.pyplot as plt  # 追加: 画像保存用
 
 
 # =========================
@@ -176,6 +175,7 @@ class DiffPCLayerTorch(nn.Module):
     def step(self, clamp_status: bool, data_in: Optional[torch.Tensor],
              s_in_disc: torch.Tensor, s_in_gen: torch.Tensor,
              e_in_disc: torch.Tensor, e_in_gen: torch.Tensor,
+             bottomup_mask: bool = False, topdown_mask: bool = False, 
              sample_step_override: Optional[int] = None):
         B = s_in_disc.size(0)
         if self.x_F_disc is None or self.x_F_gen is None or \
@@ -197,6 +197,13 @@ class DiffPCLayerTorch(nn.Module):
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
         self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
         self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
+            self.x_F_disc.zero_()
+            self.e_T_disc.zero_()
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and topdown_mask:
+            self.x_F_gen.zero_()
+            self.e_T_gen.zero_()
+
         self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
@@ -212,8 +219,10 @@ class DiffPCLayerTorch(nn.Module):
         diff_gen_err = self.e_T_gen - self.e_A_gen
         s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
         s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration: s_e_disc_new.zero_()
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration: s_e_gen_new.zero_()
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+            s_e_disc_new.zero_()
+            s_e_gen_new.zero_()
+
         self.e_A_disc.add_(s_e_disc_new * self.l_t)
         self.e_A_gen.add_(s_e_gen_new * self.l_t)
         self.s_e_disc = s_e_disc_new
@@ -368,7 +377,7 @@ class DiffPCNetworkTorch(nn.Module):
         return s_in_disc, s_in_gen, e_in_disc, e_in_gen
 
     @torch.no_grad()
-    def one_time_step(self):
+    def one_time_step(self, bottomup_mask: bool = False, topdown_mask : bool = False):
         B  = self.input_driver.x_F_disc.size(0)
         z  = torch.zeros(B, self.input_driver.dim, device=self.device)
         z_top = torch.zeros(B, self.layers[-1].dim, device=self.device)
@@ -379,10 +388,11 @@ class DiffPCNetworkTorch(nn.Module):
         s_in_gen.append(z_top)
 
         self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, s_in_gen[0],
-                               e_in_disc[0], z, sample_step_override=t)
+                               e_in_disc[0], z, False, topdown_mask, sample_step_override=t)
         for i, lyr in enumerate(self.layers):
-            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in_disc[i], s_in_gen[i+1],
-                     e_in_disc[i+1], e_in_gen[i], sample_step_override=t)
+            lyr.step(self._clamp_switch[i], self._data_bucket[i],
+                     s_in_disc[i], s_in_gen[i+1], e_in_disc[i+1], e_in_gen[i],
+                     bottomup_mask, topdown_mask, sample_step_override=t)
         
         self._global_step += 1
 
@@ -435,7 +445,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
-    for _ in range(steps_phase1): net.one_time_step()
+    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
 
     # Phase-2 (continue state)
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
@@ -448,7 +458,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     
     spike_stats = SpikeStats()
     for _ in range(steps_phase2):
-        net.one_time_step()
+        net.one_time_step(bottomup_mask=False, topdown_mask=False)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
@@ -478,7 +488,7 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     
     spike_stats = SpikeStats()
     for _ in range(steps):
-        net.one_time_step()
+        net.one_time_step(bottomup_mask=False, topdown_mask=True)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
@@ -719,10 +729,6 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
 
-    # === 追加実験: 生成タスクの実行 ===
-    # すべての学習が完了した後に実行します
-    run_generation_experiment(net, cfg, l_t_spec, y_phase2_spec, 100, log_dir)
-
     # Save
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
@@ -767,7 +773,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=15,
         alpha_disc = 1,
-        alpha_gen = 1.0,
+        alpha_gen = 0.0001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
