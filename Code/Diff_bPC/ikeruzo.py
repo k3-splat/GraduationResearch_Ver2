@@ -558,7 +558,7 @@ def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
     # Phase-1: Generation (Top-down settling)
-    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1 / cfg.alpha_gen, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
 
@@ -742,10 +742,6 @@ def main(cfg: DiffPCConfig):
         test_correct, test_total = 0, 0
         total_sa_test_p1, total_se_disc_test_p1, total_se_gen_test_p1 = 0.0, 0.0, 0.0
 
-        # 画像生成の可視化
-        print(f"Generating digits for epoch {epoch}...")
-        visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
-
         with torch.no_grad():
             for images, labels in train_loader:
                 # 修正: 元のコードで未定義だった関数名を修正 (run_batch_disc_test_two_phase)
@@ -794,6 +790,10 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
 
+    # 画像生成の可視化
+    print(f"Generating digits for epoch {epoch}...")
+    visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
+
     # Save
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
@@ -838,7 +838,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=15,
         alpha_disc = 1,
-        alpha_gen = 0.001,
+        alpha_gen = 0.01,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.utils import save_image  # 追加: 画像保存用
 
 
 # =========================
@@ -499,6 +500,135 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     return net.layers[-1].x_T.clone(), spike_stats
 
 
+@torch.no_grad()
+def run_batch_disc_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    lt_n = l_t_spec["args"]["n"]
+    steps_phase1 = cfg.t_init_cycles * lt_n
+    steps_phase2 = cfg.phase2_cycles * lt_n
+    
+    net.set_sampling_duration(steps_phase1 + steps_phase2)
+    net.reset_all_states(x.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+
+    # Phase-1
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase1)
+
+    net.set_training(False)                       # v2: no dropout in P1
+
+    net.set_clamp(0, True, x)
+    for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
+    for _ in range(steps_phase1): net.one_time_step()
+
+    # Phase-2 (continue state)
+    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
+    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase2)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps_phase2):
+        net.one_time_step()
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_total += (lyr.s_e != 0).sum().item()
+
+    return net.layers[-1].x_T.clone(), spike_stats
+
+@torch.no_grad()
+def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    """
+    指定されたラベル(y_onehot)に基づいて画像を生成するランナー。
+    Phase 1: ラベルを固定、入力層・中間層を自由にしてトップダウン信号で状態を遷移。
+    Phase 2: 安定化のため継続実行 (学習時と同様のダイナミクスを担保)。
+    """
+    lt_n = l_t_spec["args"]["n"]
+    steps_phase1 = cfg.t_init_cycles * lt_n
+    steps_phase2 = cfg.phase2_cycles * lt_n
+    
+    net.set_sampling_duration(steps_phase1 + steps_phase2)
+    net.reset_all_states(y_onehot.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+
+    # Phase-1: Generation (Top-down settling)
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase1)
+
+    net.set_training(False)
+
+    # 変更点: ラベル層(最上位)を固定し、入力層(input_driver)を含む他層をunclampする
+    net.set_clamp(len(net.layers), True, y_onehot)
+    for li in range(0, len(net.layers)): net.set_clamp(li, False)
+    
+    # Phase 1: トップダウンで夢を見させる (bottomup_mask=True でボトムアップ信号を切る設定が一般的)
+    for _ in range(steps_phase1): net.one_time_step()
+
+    # Phase-2 (continue state)
+    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
+    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase2)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps_phase2):
+        net.one_time_step()
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_total += (lyr.s_e != 0).sum().item()
+
+    # 変更点: 生成された画像データ(input_driverの状態)を返す
+    return net.input_driver.x_T.clone(), spike_stats
+
+
+# =========================
+#  Visualization Wrapper
+# =========================
+
+def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
+                               l_t_spec: dict, y_phase2_spec: dict, 
+                               epoch: int, output_dir: str = "gen_results"):
+    """
+    0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    device = net.device
+    
+    # 0~9のラベルを作成
+    labels = torch.arange(10, device=device)
+    # One-hotエンコーディング
+    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
+    
+    # 生成を実行 (Batch=10, Dim=784)
+    generated_data, _ = run_batch_gen_test_two_phase(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
+    
+    # 画像形状にリシェイプ (Batch, 1, 28, 28)
+    gen_imgs = generated_data.view(10, 1, 28, 28)
+    
+    # 正規化の解除 (Denormalize)
+    if cfg.normalize:
+        if cfg.use_fashion_mnist:
+            mean, std = 0.2860, 0.3530
+        else:
+            mean, std = 0.1307, 0.3081
+        gen_imgs = gen_imgs * std + mean
+    
+    # 範囲を[0, 1]にクリップ
+    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
+    
+    # 画像を保存
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generated.png")
+    save_image(gen_imgs, save_path, nrow=10)
+    print(f"Generated images saved to: {save_path}")
+
+
 # =========================
 #  MNIST training wrapper
 # =========================
@@ -531,6 +661,7 @@ def main(cfg: DiffPCConfig):
     log_dir = "runs"
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
+    gen_dir = os.path.join(log_dir, "generated_images")
 
     # Network and Schedulers
     l_t_spec = {
@@ -612,13 +743,13 @@ def main(cfg: DiffPCConfig):
 
         with torch.no_grad():
             for images, labels in train_loader:
-                logits, _ = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
+                logits, _ = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 train_correct += (preds == labels).sum().item()
                 train_total   += labels.size(0)
 
             for images, labels in test_loader:
-                logits, stats = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
+                logits, stats = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
@@ -650,6 +781,9 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_sa": avg_sa_test_p1,
             "avg_spikes_per_neuron_test_p1_se": avg_se_test_p1,
         })
+
+    print(f"Generating digits for epoch {epoch}...")
+    visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
 
     # Save
     with open(log_path, "w") as f:
@@ -696,7 +830,7 @@ if __name__ == "__main__":
         phase2_cycles=15,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=200,
+        epochs=10,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
