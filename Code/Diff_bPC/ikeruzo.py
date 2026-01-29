@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.utils import save_image  # 追加: 画像保存用
 
 
 # =========================
@@ -498,7 +499,7 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
 
 
 @torch.no_grad()
-def run_batch_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
+def run_batch_disc_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
                         cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
     lt_n = l_t_spec["args"]["n"]
     steps_phase1 = cfg.t_init_cycles * lt_n
@@ -537,6 +538,96 @@ def run_batch_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
 
     return net.layers[-1].x_T.clone(), spike_stats
 
+@torch.no_grad()
+def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    """
+    指定されたラベル(y_onehot)に基づいて画像を生成するランナー。
+    Phase 1: ラベルを固定、入力層・中間層を自由にしてトップダウン信号で状態を遷移。
+    Phase 2: 安定化のため継続実行 (学習時と同様のダイナミクスを担保)。
+    """
+    lt_n = l_t_spec["args"]["n"]
+    steps_phase1 = cfg.t_init_cycles * lt_n
+    steps_phase2 = cfg.phase2_cycles * lt_n
+    
+    net.set_sampling_duration(steps_phase1 + steps_phase2)
+    net.reset_all_states(y_onehot.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+
+    # Phase-1: Generation (Top-down settling)
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase1)
+
+    net.set_training(False)
+
+    # 変更点: ラベル層(最上位)を固定し、入力層(input_driver)を含む他層をunclampする
+    net.set_clamp(len(net.layers), True, y_onehot)
+    for li in range(0, len(net.layers)): net.set_clamp(li, False)
+    
+    # Phase 1: トップダウンで夢を見させる (bottomup_mask=True でボトムアップ信号を切る設定が一般的)
+    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=True, topdown_mask=False)
+
+    # Phase-2 (continue state)
+    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
+    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase2)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps_phase2):
+        net.one_time_step(bottomup_mask=False, topdown_mask=False)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+    # 変更点: 生成された画像データ(input_driverの状態)を返す
+    return net.input_driver.x_T.clone(), spike_stats
+
+
+# =========================
+#  Visualization Wrapper
+# =========================
+
+def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
+                               l_t_spec: dict, y_phase2_spec: dict, 
+                               epoch: int, output_dir: str = "gen_results"):
+    """
+    0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    device = net.device
+    
+    # 0~9のラベルを作成
+    labels = torch.arange(10, device=device)
+    # One-hotエンコーディング
+    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
+    
+    # 生成を実行 (Batch=10, Dim=784)
+    generated_data, _ = run_batch_gen_test_two_phase(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
+    
+    # 画像形状にリシェイプ (Batch, 1, 28, 28)
+    gen_imgs = generated_data.view(10, 1, 28, 28)
+    
+    # 正規化の解除 (Denormalize)
+    if cfg.normalize:
+        if cfg.use_fashion_mnist:
+            mean, std = 0.2860, 0.3530
+        else:
+            mean, std = 0.1307, 0.3081
+        gen_imgs = gen_imgs * std + mean
+    
+    # 範囲を[0, 1]にクリップ
+    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
+    
+    # 画像を保存
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generated.png")
+    save_image(gen_imgs, save_path, nrow=10)
+    print(f"Generated images saved to: {save_path}")
+
 
 # =========================
 #  MNIST training wrapper
@@ -546,7 +637,6 @@ def main(cfg: DiffPCConfig):
     # Setup
     torch.manual_seed(cfg.seed)
     
-    # Respect exact CUDA device string (e.g., "cuda:1")
     requested = str(cfg.device).lower()
     if requested.startswith("cuda"):
         if torch.cuda.is_available():
@@ -555,7 +645,7 @@ def main(cfg: DiffPCConfig):
                 if device.index is not None and device.index >= torch.cuda.device_count():
                     print(f"Warning: Requested {requested} but only {torch.cuda.device_count()} CUDA device(s) available. Using cuda:0.")
                     device = torch.device("cuda:0")
-                torch.cuda.set_device(device)  # ensure default current device
+                torch.cuda.set_device(device)
             except Exception as e:
                 print(f"Warning: Could not use '{requested}' ({e}). Falling back to cuda:0.")
                 device = torch.device("cuda:0")
@@ -570,6 +660,9 @@ def main(cfg: DiffPCConfig):
     log_dir = "runs"
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
+    
+    # 生成画像の保存先ディレクトリ
+    gen_dir = os.path.join(log_dir, "generated_images")
 
     # Network and Schedulers
     l_t_spec = {
@@ -587,7 +680,7 @@ def main(cfg: DiffPCConfig):
         device=str(device)
     )
     
-    # Data transforms (with optional Normalize and FMNIST horizontal flip)
+    # Data transforms
     if cfg.use_fashion_mnist:
         mean, std = 0.2860, 0.3530
     else:
@@ -599,7 +692,7 @@ def main(cfg: DiffPCConfig):
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding, padding_mode="edge"))
         else:
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding))
-    # Optional FMNIST horizontal flip
+
     if cfg.use_fashion_mnist and cfg.fmnist_hflip_p > 0.0:
         train_transforms_list.append(transforms.RandomHorizontalFlip(p=cfg.fmnist_hflip_p))
     train_transforms_list.append(transforms.ToTensor())
@@ -638,7 +731,6 @@ def main(cfg: DiffPCConfig):
         # Training
         total_sa_train_p2, total_se_disc_train_p2, total_se_gen_train_p2 = 0.0, 0.0, 0.0
 
-        # IMPORTANT: set training/inference modes are handled inside runner based on cfg.v1_dropout
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
             total_sa_train_p2 += stats.sa_total
@@ -650,15 +742,21 @@ def main(cfg: DiffPCConfig):
         test_correct, test_total = 0, 0
         total_sa_test_p1, total_se_disc_test_p1, total_se_gen_test_p1 = 0.0, 0.0, 0.0
 
+        # 画像生成の可視化
+        print(f"Generating digits for epoch {epoch}...")
+        visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
+
         with torch.no_grad():
             for images, labels in train_loader:
-                logits, _ = run_batch_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
+                # 修正: 元のコードで未定義だった関数名を修正 (run_batch_disc_test_two_phase)
+                logits, _ = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 train_correct += (preds == labels).sum().item()
                 train_total   += labels.size(0)
 
             for images, labels in test_loader:
-                logits, stats = run_batch_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
+                # 修正: 元のコードで未定義だった関数名を修正
+                logits, stats = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
                 preds = logits.argmax(dim=1).cpu()
                 test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
@@ -740,7 +838,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=15,
         alpha_disc = 1,
-        alpha_gen = 0.0001,
+        alpha_gen = 0.001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
