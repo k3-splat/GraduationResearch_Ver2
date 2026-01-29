@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-import matplotlib.pyplot as plt  # 追加: 画像保存用
 
 
 # =========================
@@ -176,6 +175,7 @@ class DiffPCLayerTorch(nn.Module):
     def step(self, clamp_status: bool, data_in: Optional[torch.Tensor],
              s_in_disc: torch.Tensor, s_in_gen: torch.Tensor,
              e_in_disc: torch.Tensor, e_in_gen: torch.Tensor,
+             bottomup_mask: bool = False, topdown_mask: bool = False, 
              sample_step_override: Optional[int] = None):
         B = s_in_disc.size(0)
         if self.x_F_disc is None or self.x_F_gen is None or \
@@ -197,6 +197,13 @@ class DiffPCLayerTorch(nn.Module):
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
         self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
         self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
+            self.x_F_disc.zero_()
+            self.e_T_disc.zero_()
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and topdown_mask:
+            self.x_F_gen.zero_()
+            self.e_T_gen.zero_()
+
         self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
@@ -212,8 +219,10 @@ class DiffPCLayerTorch(nn.Module):
         diff_gen_err = self.e_T_gen - self.e_A_gen
         s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
         s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration: s_e_disc_new.zero_()
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration: s_e_gen_new.zero_()
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+            s_e_disc_new.zero_()
+            s_e_gen_new.zero_()
+
         self.e_A_disc.add_(s_e_disc_new * self.l_t)
         self.e_A_gen.add_(s_e_gen_new * self.l_t)
         self.s_e_disc = s_e_disc_new
@@ -368,7 +377,7 @@ class DiffPCNetworkTorch(nn.Module):
         return s_in_disc, s_in_gen, e_in_disc, e_in_gen
 
     @torch.no_grad()
-    def one_time_step(self):
+    def one_time_step(self, bottomup_mask: bool = False, topdown_mask : bool = False):
         B  = self.input_driver.x_F_disc.size(0)
         z  = torch.zeros(B, self.input_driver.dim, device=self.device)
         z_top = torch.zeros(B, self.layers[-1].dim, device=self.device)
@@ -379,10 +388,11 @@ class DiffPCNetworkTorch(nn.Module):
         s_in_gen.append(z_top)
 
         self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, s_in_gen[0],
-                               e_in_disc[0], z, sample_step_override=t)
+                               e_in_disc[0], z, False, topdown_mask, sample_step_override=t)
         for i, lyr in enumerate(self.layers):
-            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in_disc[i], s_in_gen[i+1],
-                     e_in_disc[i+1], e_in_gen[i], sample_step_override=t)
+            lyr.step(self._clamp_switch[i], self._data_bucket[i],
+                     s_in_disc[i], s_in_gen[i+1], e_in_disc[i+1], e_in_gen[i],
+                     bottomup_mask, topdown_mask, sample_step_override=t)
         
         self._global_step += 1
 
@@ -435,7 +445,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
-    for _ in range(steps_phase1): net.one_time_step()
+    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
 
     # Phase-2 (continue state)
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
@@ -448,7 +458,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     
     spike_stats = SpikeStats()
     for _ in range(steps_phase2):
-        net.one_time_step()
+        net.one_time_step(bottomup_mask=False, topdown_mask=False)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
@@ -478,87 +488,13 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     
     spike_stats = SpikeStats()
     for _ in range(steps):
-        net.one_time_step()
+        net.one_time_step(bottomup_mask=False, topdown_mask=True)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
             
     return net.layers[-1].x_T.clone(), spike_stats
-
-@torch.no_grad()
-def run_generation_experiment(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
-                              l_t_spec: dict, y_spec: dict, epoch: int, log_dir: str):
-    """
-    学習済みモデルのラベル層を固定し、データ層をフリーにして画像を生成する実験
-    """
-    print(f"\n--- Running Generation Experiment (Epoch {epoch}) ---")
-    
-    # 0~9の数字を生成対象とする
-    digits = torch.arange(10, device=net.device)
-    y_onehot = F.one_hot(digits, num_classes=cfg.layer_dims[-1]).float()
-    
-    # スケジュール設定（学習時のPhase2と同様の設定を用いる）
-    lt_n = l_t_spec["args"]["n"]
-    custom_gen_cycles = 100
-    steps = custom_gen_cycles * lt_n
-    
-    net.set_sampling_duration(steps)
-    net.reset_all_states(batch_size=10) # 0-9の10枚分
-    net._bias_fired_once = False
-    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps
-
-    # スケジューラの初期化
-    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-    # 生成には更新が必要なので、Phase2用のy_scheduler（gamma > 0）を使用
-    y_gen = get_y_scheduler(y_spec["type"], {**y_spec["args"], "l_t_scheduler": l_t_sched})
-    
-    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_gen)
-
-    # 推論モード（Dropoutなし）
-    net.set_training(False)
-
-    # === 重要: クランプの設定 ===
-    # Layer 0 (データ層): クランプを外す (生成されたイメージが現れる場所)
-    net.set_clamp(0, False) 
-    
-    # 中間層: クランプなし (デフォルト)
-    for li in range(1, len(net.layers)):
-        net.set_clamp(li, False)
-        
-    # 最上位層 (ラベル層): クランプする (生成したい数字を指定)
-    net.set_clamp(len(net.layers), True, y_onehot)
-
-    # === 生成ループ ===
-    # 初期状態は reset_all_states でゼロになっています。
-    # トップダウンの予測誤差によって input_driver.x_T が徐々に画像へ変化します。
-    for _ in range(steps):
-        net.one_time_step()
-
-    # === 結果の取得と保存 ===
-    # input_driver (データ層) のニューロン活動 x_T を取得
-    generated_data = net.input_driver.x_T.detach().cpu()
-    
-    # 画像形状にリシェイプ (MNIST/FashionMNIST: 28x28)
-    img_size = int(math.sqrt(net.cfg.layer_dims[0])) 
-    generated_imgs = generated_data.view(10, img_size, img_size)
-
-    # プロット
-    fig, axes = plt.subplots(1, 10, figsize=(15, 2))
-    for i in range(10):
-        ax = axes[i]
-        # 0番目の次元を取り出して表示
-        ax.imshow(generated_imgs[i], cmap='gray')
-        ax.axis('off')
-        ax.set_title(f"{digits[i].item()}")
-    
-    save_path = os.path.join(log_dir, f"{cfg.run_name}_epoch{epoch:02d}_generated.png")
-    plt.suptitle(f"Generated Digits (Epoch {epoch})", fontsize=14)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
-    print(f"Generated images saved to {save_path}")
 
 
 # =========================
@@ -719,10 +655,6 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
 
-    # === 追加実験: 生成タスクの実行 ===
-    # すべての学習が完了した後に実行します
-    run_generation_experiment(net, cfg, l_t_spec, y_phase2_spec, 100, log_dir)
-
     # Save
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
@@ -767,7 +699,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=15,
         alpha_disc = 1,
-        alpha_gen = 0.1,
+        alpha_gen = 0.0001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
