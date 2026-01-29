@@ -43,7 +43,7 @@ COMMON_CONFIG = {
     # True : Optunaによる探索を実行 (Table 5の設定を使用)
     # False: 探索をスキップし、下記 'fixed_params' で学習・生成のみ実行
     # -----------------------------------------------------------
-    'run_search': True,  # ★ここを False にすれば探索なしモードになります
+    'run_search': False,  # ★ここを False にすれば探索なしモードになります
 
     # 探索設定 (Table 5準拠)
     'search_trials': 20,    # 探索回数 (必要に応じて増やしてください)
@@ -54,12 +54,12 @@ COMMON_CONFIG = {
     
     # 固定パラメータ (探索スキップ時に使用するデフォルト設定)
     'fixed_params': {
-        'activation': 'leaky_relu',
-        'lr_activities': 0.05,
+        'activation': 'tanh',
+        'lr_activities': 0.001238616884883715,
         'momentum': 0.9,
-        'lr_weights': 1e-4,
-        'weight_decay': 1e-3,
-        'alpha_gen': 0.01,  
+        'lr_weights': 9.619920786823702e-05,
+        'weight_decay': 0.0029641169521327153,
+        'alpha_gen': 0.001,  
         'alpha_disc': 1.0,    
         'T_train': 8,         
         'T_eval': 100         
@@ -403,7 +403,7 @@ def search_hyperparameters(train_loader, val_loader):
             # Combined Objective
             # Accuracyは大きいほど良いので (1 - acc/100) で最小化問題にする
             # RMSEは小さいほど良い
-            combined_loss = (1.0 - val_acc / 100.0) + val_rmse
+            combined_loss = 2 * (1.0 - val_acc / 100.0) + val_rmse
             
             trial.report(combined_loss, epoch)
             if trial.should_prune():
