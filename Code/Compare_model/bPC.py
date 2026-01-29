@@ -369,7 +369,7 @@ def search_hyperparameters(train_loader, val_loader):
             # 探索時間の短縮のため、ここでは最初の50バッチのみ使用しています。
             # フルデータセットで探索したい場合は "if i > 50: break" を削除してください。
             for i, (images, labels) in enumerate(train_loader):
-                if i > 50: break 
+                # if i > 50: break 
                 images, labels = images.to(device), labels.to(device)
                 
                 activities = model.forward_init(images)
