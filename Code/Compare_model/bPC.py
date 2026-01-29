@@ -567,7 +567,7 @@ def generate_images_from_labels(model, device, params, class_averages, save_path
     # 修正案: vmin=0, vmax=1 を指定して、値が小さいときは「暗く」表示させる
     for i in range(10):
         # vmin=0, vmax=1 を追加
-        axes[i].imshow(x_img[i], cmap='gray', vmin=0, vmax=1)
+        axes[i].imshow(x_img[i], cmap='gray')
         axes[i].axis('off')
     plt.tight_layout()
     plt.savefig(save_path)

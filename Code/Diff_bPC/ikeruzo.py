@@ -209,7 +209,7 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
@@ -558,7 +558,7 @@ def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
     # Phase-1: Generation (Top-down settling)
-    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1 / cfg.alpha_gen, "n": 1})
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
 
@@ -836,12 +836,12 @@ if __name__ == "__main__":
         gamma_value=0.05,
         gamma_every_n=None,
         t_init_cycles=15,
-        phase2_cycles=15,
+        phase2_cycles=20,
         alpha_disc = 1,
         alpha_gen = 0.01,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=25,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
