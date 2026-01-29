@@ -500,7 +500,7 @@ def run_generation_experiment(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     
     # スケジュール設定（学習時のPhase2と同様の設定を用いる）
     lt_n = l_t_spec["args"]["n"]
-    custom_gen_cycles = 100
+    custom_gen_cycles = 500
     steps = custom_gen_cycles * lt_n
     
     net.set_sampling_duration(steps)
@@ -767,7 +767,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=15,
         alpha_disc = 1,
-        alpha_gen = 0.1,
+        alpha_gen = 1.0,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
