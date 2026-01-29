@@ -564,8 +564,10 @@ def generate_images_from_labels(model, device, params, class_averages, save_path
 
     x_img = x[0].detach().cpu().numpy().reshape(10, 28, 28)
     fig, axes = plt.subplots(1, 10, figsize=(15, 2))
+    # 修正案: vmin=0, vmax=1 を指定して、値が小さいときは「暗く」表示させる
     for i in range(10):
-        axes[i].imshow(x_img[i], cmap='gray')
+        # vmin=0, vmax=1 を追加
+        axes[i].imshow(x_img[i], cmap='gray', vmin=0, vmax=1)
         axes[i].axis('off')
     plt.tight_layout()
     plt.savefig(save_path)
