@@ -15,10 +15,10 @@ from datetime import datetime
 import pandas as pd
 
 CONFIG = {
-    'alpha_gen' : 0,
+    'alpha_gen' : 1e-4,
     'alpha_disc' : 1.0,
-    'gamma' : 0.025,
-    'alpha' : 0.0005,
+    'gamma' : 0.05,
+    'alpha' : 0.001,
     'a' : 1.0,
     'm' : 2.0,
     'n' : 5.0,
@@ -278,6 +278,7 @@ class Diff_bPC(nn.Module):
                 if y_target is not None:
                     layer.x_T = y_target
                 else:
+                    pass
                     layer.x_T = torch.matmul(current, self.V[i-1].t())
 
     def gamma_cycle(self, t):
@@ -499,7 +500,6 @@ def run_experiment(dataset_name='MNIST'):
             _, pred = torch.max(model.layers[-1].x_T, 1)
             test_correct += (pred == lbls).sum().item()
             test_samples += lbls.size(0)
-            print(model.layers[-1].x_T)
             
         test_acc = 100 * test_correct / test_samples
         epoch_time = time.time() - epoch_start

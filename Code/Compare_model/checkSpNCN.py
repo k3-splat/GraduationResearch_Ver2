@@ -23,7 +23,7 @@ CONFIG = {
     'thresh': 0.4,       # 発火閾値
     'num_steps': 800,    # 推論ステップ数
     'batch_size': 1,
-    'epochs': 10,        # 学習エポック数
+    'epochs': 1,        # 学習エポック数
     'max_freq' : 63.75,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'save_dir': './results/SpNCN_Comparison' # 結果保存先
@@ -247,8 +247,8 @@ def run_experiment(dataset_name='MNIST'):
     # 修正箇所: データを10個だけに制限する処理
     # ========================================================
     print(f"!!! {dataset_name}: 使用データを先頭10個に制限します !!!")
-    train_d = Subset(train_d, range(10))
-    test_d = Subset(test_d, range(10))
+    #train_d = Subset(train_d, range(10))
+    #test_d = Subset(test_d, range(10))
     # ========================================================
 
     # DataLoader
@@ -302,7 +302,6 @@ def run_experiment(dataset_name='MNIST'):
                 # ログ出力頻度調整（データが少ないので毎回出ても良いが、念のため残す）
                 if batch_idx % 1 == 0:
                     print(f"Epoch {epoch} | Batch {batch_idx} | Train Acc: {100*train_correct/train_samples:.2f}%")
-                    print(out_spikes) # 冗長な出力は抑制してもよい
 
             train_acc = 100 * train_correct / train_samples
             epoch_synops = model.total_synops - start_synops
