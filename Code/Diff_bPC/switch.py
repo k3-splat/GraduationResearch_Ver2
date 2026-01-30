@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.utils import save_image  # [追加] 画像保存用
 
 
 # =========================
@@ -457,6 +458,12 @@ class DiffPCNetworkTorch(nn.Module):
 @torch.no_grad()
 def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torch.Tensor,
                         cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    """
+    1. Phase 1: Pure Bottom-up Inference (topdown_mask=True)
+    2. Phase 2 (Part A): Bottom-up Settling (topdown_mask=True) with labels available but not flowing down yet
+    3. Clamp all hidden layers to their current bottom-up state
+    4. Phase 2 (Part B): Top-down Update (bottomup_mask=True) -> only V is updated
+    """
     lt_n = l_t_spec["args"]["n"]
     steps_phase1 = cfg.t_init_cycles * lt_n
     steps_phase2 = cfg.phase2_cycles * lt_n
@@ -468,39 +475,46 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
-    # Phase-1
+    # Phase-1 (Bottom-up only)
     y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
 
-    net.set_training(False)                       # v2: no dropout in P1
+    net.set_training(False)
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
-    # Note: topdown_mask=True here ensures pure bottom-up inference in Phase 1
-    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
+    
+    # Bottom-up only inference
+    for _ in range(steps_phase1): 
+        net.one_time_step(bottomup_mask=False, topdown_mask=True)
 
-    # Phase-2 (continue state)
+    # Phase-2
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
     l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase2)
 
-    net.set_training(True)                      # v2: nn.Dropout active now
+    net.set_training(True)
 
+    # Fix label
     net.set_clamp(len(net.layers), True, y_onehot)
     
     spike_stats = SpikeStats()
+    
+    # 2a. Continue bottom-up inference to settle (still blocking top-down)
     for _ in range(steps_phase2):
-        # Note: Both masks False here allows bidirectional flow (Deep Learning)
         net.one_time_step(bottomup_mask=False, topdown_mask=True)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
 
+    # 2b. Clamp Hidden Layers (Freeze Bottom-up state)
     for li in range(1, len(net.layers)): net.clamp_layer_to_current_state(li)
+
+    # 2c. Top-down Only Update (Block Bottom-up)
+    # This generates errors for V (Top-down) but e_disc will be 0 (so W is not updated)
     for _ in range(steps_phase2):
-        # Note: Both masks False here allows bidirectional flow (Deep Learning)
         net.one_time_step(bottomup_mask=True, topdown_mask=False)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
@@ -542,6 +556,10 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
 
 @torch.no_grad()
 def infer_batch_backword_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    """
+    Generates images from labels by clamping label and running top-down only.
+    Returns: (Generated Images at Input Layer, SpikeStats)
+    """
     lt_n = l_t_spec["args"]["n"]
     steps = cfg.t_init_cycles * lt_n
     net.set_sampling_duration(steps)
@@ -554,29 +572,30 @@ def infer_batch_backword_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, c
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_forward)
 
-    net.set_training(False)                 # v2: no dropout in inference
+    net.set_training(False)
 
+    # Clamp Label (Top layer), Unclamp Input (Bottom layer)
     net.set_clamp(len(net.layers), True, y_onehot)
     for li in range(0, len(net.layers)): net.set_clamp(li, False)
     
     spike_stats = SpikeStats()
     for _ in range(steps):
-        # Force bottom-up only inference
+        # Force top-down only inference (Dreaming)
         net.one_time_step(bottomup_mask=True, topdown_mask=False)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
             
-    return net.layers[-1].x_T.clone(), spike_stats
+    # [CORRECTION]: Return Input Driver's state (Generated Image), not the label
+    return net.input_driver.x_T.clone(), spike_stats
 
 # =========================
 #  Visualization Wrapper
 # =========================
 
 def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
-                               l_t_spec: dict, y_phase2_spec: dict, 
-                               epoch: int, output_dir: str = "gen_results"):
+                               l_t_spec: dict, epoch: int, output_dir: str = "gen_results"):
     """
     0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
     """
@@ -589,7 +608,7 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
     
     # 生成を実行 (Batch=10, Dim=784)
-    generated_data, _ = infer_batch_backword_only(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
+    generated_data, _ = infer_batch_backword_only(net, y_onehot, cfg, l_t_spec)
     
     # 画像形状にリシェイプ (Batch, 1, 28, 28)
     gen_imgs = generated_data.view(10, 1, 28, 28)
@@ -606,7 +625,7 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
     
     # 画像を保存
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_gjggenerated.png")
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generated.png")
     save_image(gen_imgs, save_path, nrow=10)
     print(f"Generated images saved to: {save_path}")
 
@@ -711,7 +730,6 @@ def main(cfg: DiffPCConfig):
         # Training
         total_sa_train_p2, total_se_disc_train_p2, total_se_gen_train_p2 = 0.0, 0.0, 0.0
 
-        # IMPORTANT: set training/inference modes are handled inside runner based on cfg.v1_dropout
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
             total_sa_train_p2 += stats.sa_total
@@ -756,6 +774,9 @@ def main(cfg: DiffPCConfig):
             f"Avg Spikes/N (Train P2): s_a={avg_sa_train_p2:.2f}, s_e_disc={avg_se_disc_train_p2:.2f} , s_e_gen={avg_se_gen_train_p2:.2f}| "
             f"Avg Spikes/N (Test P1):  s_a={avg_sa_test_p1:.2f}, s_e_disc={avg_se_disc_test_p1:.2f}, s_e_gen={avg_se_gen_test_p1:.2f}"
         )
+        
+        # [NEW]: Visualize generation every epoch
+        visualize_generated_digits(net, cfg, l_t_spec, epoch)
 
         run_results.append({
             "epoch": epoch,
