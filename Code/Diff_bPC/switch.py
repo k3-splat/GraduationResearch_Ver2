@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torchvision.utils import save_image  # 追加: 画像保存用
 
 
 # =========================
@@ -174,19 +173,22 @@ class DiffPCLayerTorch(nn.Module):
 
     @torch.no_grad()
     def step(self, clamp_status: bool, data_in: Optional[torch.Tensor],
-             s_in_disc: torch.Tensor, s_in_gen: torch.Tensor,
-             e_in_disc: torch.Tensor, e_in_gen: torch.Tensor,
              bottomup_mask: bool = False, topdown_mask: bool = False, 
+             s_in_disc: torch.Tensor=None, s_in_gen: torch.Tensor=None,
+             e_in_disc: torch.Tensor=None, e_in_gen: torch.Tensor=None,
              sample_step_override: Optional[int] = None):
-        B = s_in_disc.size(0)
-        if self.x_F_disc is None or self.x_F_gen is None or \
-            self.x_F_disc.size(0) != B or self.x_F_gen.size(0) != B: self._alloc(B)
+        if topdown_mask:
+            B = s_in_disc.size(0)
+            if self.x_F_disc is None or self.x_F_disc.size(0) != B: self._alloc(B)
+            self.s_in_disc = s_in_disc.to(self.device)
+        elif bottomup_mask:
+            B = s_in_gen.size(0)
+            if self.x_F_gen is None or self.x_F_gen.size(0) != B: self._alloc(B)
+            self.s_in_gen = s_in_gen.to(self.device)
         
         sample_step = self._sample_step() if sample_step_override is None else sample_step_override
         
         if clamp_status: self.x_T.copy_(data_in.to(self.device))
-        self.s_in_disc = s_in_disc.to(self.device)
-        self.s_in_gen = s_in_gen.to(self.device)
         self.reset_states_if_needed(clamp_status=clamp_status, sample_step=sample_step)
         
         l_t_cur  = self.l_t_scheduler.get_l_t(sample_step,     self.learning_weights)
@@ -194,51 +196,51 @@ class DiffPCLayerTorch(nn.Module):
         self.l_t = l_t_cur
         self.y   = self.y_scheduler.get_y(sample_step, self.learning_weights)
 
-        self.x_F_disc.add_(self.s_in_disc * l_t_prev)
-        self.x_F_gen.add_(self.s_in_gen * l_t_prev)
-        self.e_T_disc = self.x_T - self.x_F_disc
-        self.e_T_gen = self.x_T - self.x_F_gen
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
-            self.x_F_disc.zero_()
-            self.e_T_disc.zero_()
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and topdown_mask:
-            self.x_F_gen.zero_()
-            self.e_T_gen.zero_()
-
-        self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
-        self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
+        if topdown_mask:
+            self.x_F_disc.add_(self.s_in_disc * l_t_prev)
+            self.e_T_disc = self.x_T - self.x_F_disc
+            self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
+        elif bottomup_mask:
+            self.x_F_gen.add_(self.s_in_gen * l_t_prev)
+            self.e_T_gen = self.x_T - self.x_F_gen
+            self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.alpha_disc * self.e_T_disc - self.alpha_gen * self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
         s_A_new = s_A_new * ((self.x_A + s_A_new * self.l_t) > 0.0)
         self.x_A.add_(s_A_new * self.l_t); self.s_A = s_A_new
         
-        diff_disc_err = self.e_T_disc - self.e_A_disc
-        diff_gen_err = self.e_T_gen - self.e_A_gen
-        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
-        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
-            s_e_disc_new.zero_()
-            s_e_gen_new.zero_()
+        if topdown_mask:
+            diff_disc_err = self.e_T_disc - self.e_A_disc
+            s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
+            if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+                s_e_disc_new.zero_()
+            self.e_A_disc.add_(s_e_disc_new * self.l_t)
+            self.s_e_disc = s_e_disc_new
 
-        self.e_A_disc.add_(s_e_disc_new * self.l_t)
-        self.e_A_gen.add_(s_e_gen_new * self.l_t)
-        self.s_e_disc = s_e_disc_new
-        self.s_e_gen = s_e_gen_new
+            if self.s_e_disc_prev is None or self.s_e_disc_prev.shape != self.s_e_disc.shape:
+                self.s_e_disc_prev = torch.zeros_like(self.s_e_disc)
+            self.s_e_disc_prev.copy_(self.s_e_disc)
+
+        elif bottomup_mask:
+            diff_gen_err = self.e_T_gen - self.e_A_gen
+            s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
+            if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+                s_e_gen_new.zero_()
+            self.e_A_gen.add_(s_e_gen_new * self.l_t)
+            self.s_e_gen = s_e_gen_new
+
+            if self.s_e_gen_prev is None or self.s_e_gen_prev.shape != self.s_e_gen.shape:
+                self.s_e_gen_prev = torch.zeros_like(self.s_e_gen)
+            self.s_e_gen_prev.copy_(self.s_e_gen)
 
         # publish for next tick
         if self.s_A_prev is None or self.s_A_prev.shape != self.s_A.shape:
             self.s_A_prev = torch.zeros_like(self.s_A)
-        if self.s_e_disc_prev is None or self.s_e_disc_prev.shape != self.s_e_disc.shape:
-            self.s_e_disc_prev = torch.zeros_like(self.s_e_disc)
-        if self.s_e_gen_prev is None or self.s_e_gen_prev.shape != self.s_e_gen.shape:
-            self.s_e_gen_prev = torch.zeros_like(self.s_e_gen)
         self.s_A_prev.copy_(self.s_A)
-        self.s_e_disc_prev.copy_(self.s_e_disc)
-        self.s_e_gen_prev.copy_(self.s_e_gen)
 
         if sample_step_override is not None:
             self.time_step = int(sample_step_override) + 1
@@ -330,9 +332,7 @@ class DiffPCNetworkTorch(nn.Module):
         else: self._clamp_switch[layer_index-1], self._data_bucket[layer_index-1] = clamp, data
 
     @torch.no_grad()
-    def _build_s_in_and_e_in(self):
-        s_in_disc, s_in_gen, e_in_disc, e_in_gen = [], [], [], []
-
+    def _build_s_in_and_e_in(self, topdown_mask: bool, bottomup_mask:bool):
         sd = self.layers[0].sampling_duration if len(self.layers) > 0 else 1
         t  = self._global_step % sd
 
@@ -344,38 +344,52 @@ class DiffPCNetworkTorch(nn.Module):
         else:
             bias_spike = 0.0
 
-        # consume previous-tick spikes
-        prev_s_disc = self.input_driver.s_A_prev
-        prev_s_gen = self.layers[0].s_A_prev
-        for l in range(len(self.W)):
-            s_in_disc_l = prev_s_disc @ self.W[l].T
-            s_in_gen_l = prev_s_gen @ self.V[l].T
+        if topdown_mask:
+            s_in_disc, e_in_disc = [], []
 
-            if bias_spike != 0.0:
-                s_in_disc_l.add_(self.W_bias[l].T)
-                s_in_gen_l.add_(self.V_bias[l].T)
+            prev_s_disc = self.input_driver.s_A_prev
+            for l in range(len(self.W)):
+                s_in_disc_l = prev_s_disc @ self.W[l].T
 
-            s_in_disc.append(s_in_disc_l)
-            prev_s_disc = self.layers[l].s_A_prev
-            s_in_gen.append(s_in_gen_l)
-            if l < len(self.W) - 1:
-                prev_s_gen = self.layers[l+1].s_A_prev
+                if bias_spike != 0.0:
+                    s_in_disc_l.add_(self.W_bias[l].T)
 
-        for l in range(len(self.cfg.layer_dims)):
-            if l < len(self.cfg.layer_dims) - 1:
-                e_in_disc_l = self.layers[l].s_e_disc_prev @ self.W[l]
+                s_in_disc.append(s_in_disc_l)
+                prev_s_disc = self.layers[l].s_A_prev
+
+            for l in range(len(self.cfg.layer_dims)):
+                if l < len(self.cfg.layer_dims) - 1:
+                    e_in_disc_l = self.layers[l].s_e_disc_prev @ self.W[l]
+                else:
+                    e_in_disc_l = torch.zeros_like(self.layers[l-1].s_e_disc_prev)
+
+                e_in_disc.append(e_in_disc_l)
+
+            return s_in_disc, e_in_disc
+
+        elif bottomup_mask:
+            s_in_gen, e_in_gen = [], []
+
+            prev_s_gen = self.layers[0].s_A_prev
+            for l in range(len(self.W)):
+                s_in_gen_l = prev_s_gen @ self.V[l].T
+
+                if bias_spike != 0.0:
+                    s_in_gen_l.add_(self.V_bias[l].T)
+
+                s_in_gen.append(s_in_gen_l)
+                if l < len(self.W) - 1:
+                    prev_s_gen = self.layers[l+1].s_A_prev
+
+            for l in range(len(self.W)):
                 if l == 0:
                     e_in_gen_l = self.input_driver.s_e_gen_prev @ self.V[l]
                 else:
                     e_in_gen_l = self.layers[l-1].s_e_gen_prev @ self.V[l]
 
-            else:
-                e_in_disc_l = torch.zeros_like(self.layers[l-1].s_e_disc_prev)
+                e_in_gen.append(e_in_gen_l)
 
-            e_in_disc.append(e_in_disc_l)
-            e_in_gen.append(e_in_gen_l)
-
-        return s_in_disc, s_in_gen, e_in_disc, e_in_gen
+            return s_in_gen, e_in_gen
 
     @torch.no_grad()
     def one_time_step(self, bottomup_mask: bool = False, topdown_mask : bool = False):
@@ -384,6 +398,15 @@ class DiffPCNetworkTorch(nn.Module):
         z_top = torch.zeros(B, self.layers[-1].dim, device=self.device)
         sd = self.input_driver.sampling_duration
         t  = self._global_step % sd
+
+        if topdown_mask:
+            s_in_disc, e_in_disc = self._build_s_in_and_e_in()
+            self.input_driver.step(clamp_status=self.input_driver_clamp, data_in=self.input_driver_data, 
+                                   e_in_disc=e_in_disc[0], bottomup_mask=bottomup_mask, topdown_mask=topdown_mask, sample_step_override=t)
+            for i, lyr in enumerate(self.layers):
+                lyr.step(clamp_status=self._clamp_switch[i], data_in=self._data_bucket[i],
+                        s_in_disc=s_in_disc[i], e_in_disc=e_in_disc[i+1],
+                        bottomup_mask=bottomup_mask, topdown_mask=topdown_mask, sample_step_override=t)
 
         s_in_disc, s_in_gen, e_in_disc, e_in_gen = self._build_s_in_and_e_in()
         s_in_gen.append(z_top)
@@ -409,10 +432,10 @@ class DiffPCNetworkTorch(nn.Module):
             post_eT_disc = lyr.e_T_disc
             post_eT_gen = self.input_driver.e_T_gen if l == 0 else self.layers[l-1].e_T_gen
 
-            self.W[l].grad = - cfg.alpha_disc * (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
-            self.W_bias[l].grad = - cfg.alpha_disc * post_eT_disc.sum(dim=0, keepdim=True).T / Bf
-            self.V[l].grad = - cfg.alpha_gen * (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
-            self.V_bias[l].grad = - cfg.alpha_gen * post_eT_gen.sum(dim=0, keepdim=True).T / Bf
+            self.W[l].grad = - (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
+            self.W_bias[l].grad = - post_eT_disc.sum(dim=0, keepdim=True).T / Bf
+            self.V[l].grad = - (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
+            self.V_bias[l].grad = - post_eT_gen.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias) + list(self.V) + list(self.V_bias), self.cfg.clip_grad_norm)
@@ -498,137 +521,6 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     return net.layers[-1].x_T.clone(), spike_stats
 
 
-@torch.no_grad()
-def run_batch_disc_test_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor,
-                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
-    lt_n = l_t_spec["args"]["n"]
-    steps_phase1 = cfg.t_init_cycles * lt_n
-    steps_phase2 = cfg.phase2_cycles * lt_n
-    
-    net.set_sampling_duration(steps_phase1 + steps_phase2)
-    net.reset_all_states(x.size(0))
-    net._bias_fired_once = False
-    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
-    
-    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-
-    # Phase-1
-    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
-    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_phase1)
-
-    net.set_training(False)                       # v2: no dropout in P1
-
-    net.set_clamp(0, True, x)
-    for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
-    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
-
-    # Phase-2 (continue state)
-    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
-    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_phase2)
-    
-    spike_stats = SpikeStats()
-    for _ in range(steps_phase2):
-        net.one_time_step(bottomup_mask=False, topdown_mask=False)
-        for lyr in net.layers:
-            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
-            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
-            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
-
-    return net.layers[-1].x_T.clone(), spike_stats
-
-@torch.no_grad()
-def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
-                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
-    """
-    指定されたラベル(y_onehot)に基づいて画像を生成するランナー。
-    Phase 1: ラベルを固定、入力層・中間層を自由にしてトップダウン信号で状態を遷移。
-    Phase 2: 安定化のため継続実行 (学習時と同様のダイナミクスを担保)。
-    """
-    lt_n = l_t_spec["args"]["n"]
-    steps_phase1 = cfg.t_init_cycles * lt_n
-    steps_phase2 = cfg.phase2_cycles * lt_n
-    
-    net.set_sampling_duration(steps_phase1 + steps_phase2)
-    net.reset_all_states(y_onehot.size(0))
-    net._bias_fired_once = False
-    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
-    
-    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-
-    # Phase-1: Generation (Top-down settling)
-    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1, "n": 1})
-    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_phase1)
-
-    net.set_training(False)
-
-    # 変更点: ラベル層(最上位)を固定し、入力層(input_driver)を含む他層をunclampする
-    net.set_clamp(len(net.layers), True, y_onehot)
-    for li in range(0, len(net.layers)): net.set_clamp(li, False)
-    
-    # Phase 1: トップダウンで夢を見させる (bottomup_mask=True でボトムアップ信号を切る設定が一般的)
-    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=True, topdown_mask=False)
-
-    # Phase-2 (continue state)
-    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
-    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_phase2)
-    
-    spike_stats = SpikeStats()
-    for _ in range(steps_phase2):
-        net.one_time_step(bottomup_mask=False, topdown_mask=False)
-        for lyr in net.layers:
-            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
-            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
-            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
-
-    # 変更点: 生成された画像データ(input_driverの状態)を返す
-    return net.input_driver.x_T.clone(), spike_stats
-
-
-# =========================
-#  Visualization Wrapper
-# =========================
-
-def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
-                               l_t_spec: dict, y_phase2_spec: dict, 
-                               epoch: int, output_dir: str = "gen_results"):
-    """
-    0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    device = net.device
-    
-    # 0~9のラベルを作成
-    labels = torch.arange(10, device=device)
-    # One-hotエンコーディング
-    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
-    
-    # 生成を実行 (Batch=10, Dim=784)
-    generated_data, _ = run_batch_gen_test_two_phase(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
-    
-    # 画像形状にリシェイプ (Batch, 1, 28, 28)
-    gen_imgs = generated_data.view(10, 1, 28, 28)
-    
-    # 正規化の解除 (Denormalize)
-    if cfg.normalize:
-        if cfg.use_fashion_mnist:
-            mean, std = 0.2860, 0.3530
-        else:
-            mean, std = 0.1307, 0.3081
-        gen_imgs = gen_imgs * std + mean
-    
-    # 範囲を[0, 1]にクリップ
-    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
-    
-    # 画像を保存
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_gjggenerated.png")
-    save_image(gen_imgs, save_path, nrow=10)
-    print(f"Generated images saved to: {save_path}")
-
-
 # =========================
 #  MNIST training wrapper
 # =========================
@@ -637,6 +529,7 @@ def main(cfg: DiffPCConfig):
     # Setup
     torch.manual_seed(cfg.seed)
     
+    # Respect exact CUDA device string (e.g., "cuda:1")
     requested = str(cfg.device).lower()
     if requested.startswith("cuda"):
         if torch.cuda.is_available():
@@ -645,7 +538,7 @@ def main(cfg: DiffPCConfig):
                 if device.index is not None and device.index >= torch.cuda.device_count():
                     print(f"Warning: Requested {requested} but only {torch.cuda.device_count()} CUDA device(s) available. Using cuda:0.")
                     device = torch.device("cuda:0")
-                torch.cuda.set_device(device)
+                torch.cuda.set_device(device)  # ensure default current device
             except Exception as e:
                 print(f"Warning: Could not use '{requested}' ({e}). Falling back to cuda:0.")
                 device = torch.device("cuda:0")
@@ -660,9 +553,6 @@ def main(cfg: DiffPCConfig):
     log_dir = "runs"
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
-    
-    # 生成画像の保存先ディレクトリ
-    gen_dir = os.path.join(log_dir, "generated_images")
 
     # Network and Schedulers
     l_t_spec = {
@@ -680,7 +570,7 @@ def main(cfg: DiffPCConfig):
         device=str(device)
     )
     
-    # Data transforms
+    # Data transforms (with optional Normalize and FMNIST horizontal flip)
     if cfg.use_fashion_mnist:
         mean, std = 0.2860, 0.3530
     else:
@@ -692,7 +582,7 @@ def main(cfg: DiffPCConfig):
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding, padding_mode="edge"))
         else:
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding))
-
+    # Optional FMNIST horizontal flip
     if cfg.use_fashion_mnist and cfg.fmnist_hflip_p > 0.0:
         train_transforms_list.append(transforms.RandomHorizontalFlip(p=cfg.fmnist_hflip_p))
     train_transforms_list.append(transforms.ToTensor())
@@ -731,6 +621,7 @@ def main(cfg: DiffPCConfig):
         # Training
         total_sa_train_p2, total_se_disc_train_p2, total_se_gen_train_p2 = 0.0, 0.0, 0.0
 
+        # IMPORTANT: set training/inference modes are handled inside runner based on cfg.v1_dropout
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
             total_sa_train_p2 += stats.sa_total
@@ -744,15 +635,13 @@ def main(cfg: DiffPCConfig):
 
         with torch.no_grad():
             for images, labels in train_loader:
-                # 修正: 元のコードで未定義だった関数名を修正 (run_batch_disc_test_two_phase)
-                logits, _ = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
+                logits, _ = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
                 preds = logits.argmax(dim=1).cpu()
                 train_correct += (preds == labels).sum().item()
                 train_total   += labels.size(0)
 
             for images, labels in test_loader:
-                # 修正: 元のコードで未定義だった関数名を修正
-                logits, stats = run_batch_disc_test_two_phase(net, to_vec(images), cfg, l_t_spec, y_phase2_spec)
+                logits, stats = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
                 preds = logits.argmax(dim=1).cpu()
                 test_correct += (preds == labels).sum().item()
                 test_total   += labels.size(0)
@@ -789,11 +678,6 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_disc": avg_se_disc_test_p1,
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
-
-        if epoch % 5 == 0:
-            # 画像生成の可視化
-            print(f"Generating digits for epoch {epoch}...")
-            visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
 
     # Save
     with open(log_path, "w") as f:
@@ -838,11 +722,9 @@ if __name__ == "__main__":
         gamma_every_n=None,
         t_init_cycles=15,
         phase2_cycles=15,
-        alpha_disc = 1,
-        alpha_gen = 1.0,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=100,
+        epochs=10,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
