@@ -173,22 +173,19 @@ class DiffPCLayerTorch(nn.Module):
 
     @torch.no_grad()
     def step(self, clamp_status: bool, data_in: Optional[torch.Tensor],
+             s_in_disc: torch.Tensor, s_in_gen: torch.Tensor,
+             e_in_disc: torch.Tensor, e_in_gen: torch.Tensor,
              bottomup_mask: bool = False, topdown_mask: bool = False, 
-             s_in_disc: torch.Tensor=None, s_in_gen: torch.Tensor=None,
-             e_in_disc: torch.Tensor=None, e_in_gen: torch.Tensor=None,
              sample_step_override: Optional[int] = None):
-        if topdown_mask:
-            B = s_in_disc.size(0)
-            if self.x_F_disc is None or self.x_F_disc.size(0) != B: self._alloc(B)
-            self.s_in_disc = s_in_disc.to(self.device)
-        elif bottomup_mask:
-            B = s_in_gen.size(0)
-            if self.x_F_gen is None or self.x_F_gen.size(0) != B: self._alloc(B)
-            self.s_in_gen = s_in_gen.to(self.device)
+        B = s_in_disc.size(0)
+        if self.x_F_disc is None or self.x_F_gen is None or \
+            self.x_F_disc.size(0) != B or self.x_F_gen.size(0) != B: self._alloc(B)
         
         sample_step = self._sample_step() if sample_step_override is None else sample_step_override
         
         if clamp_status: self.x_T.copy_(data_in.to(self.device))
+        self.s_in_disc = s_in_disc.to(self.device)
+        self.s_in_gen = s_in_gen.to(self.device)
         self.reset_states_if_needed(clamp_status=clamp_status, sample_step=sample_step)
         
         l_t_cur  = self.l_t_scheduler.get_l_t(sample_step,     self.learning_weights)
@@ -196,14 +193,19 @@ class DiffPCLayerTorch(nn.Module):
         self.l_t = l_t_cur
         self.y   = self.y_scheduler.get_y(sample_step, self.learning_weights)
 
-        if topdown_mask:
-            self.x_F_disc.add_(self.s_in_disc * l_t_prev)
-            self.e_T_disc = self.x_T - self.x_F_disc
-            self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
-        elif bottomup_mask:
-            self.x_F_gen.add_(self.s_in_gen * l_t_prev)
-            self.e_T_gen = self.x_T - self.x_F_gen
-            self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
+        self.x_F_disc.add_(self.s_in_disc * l_t_prev)
+        self.x_F_gen.add_(self.s_in_gen * l_t_prev)
+        self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
+        self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
+            self.x_F_disc.zero_()
+            self.e_T_disc.zero_()
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and topdown_mask:
+            self.x_F_gen.zero_()
+            self.e_T_gen.zero_()
+
+        self.e_in_disc.add_(e_in_disc.to(self.device) * l_t_prev)
+        self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
             self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
@@ -213,34 +215,29 @@ class DiffPCLayerTorch(nn.Module):
         s_A_new = s_A_new * ((self.x_A + s_A_new * self.l_t) > 0.0)
         self.x_A.add_(s_A_new * self.l_t); self.s_A = s_A_new
         
-        if topdown_mask:
-            diff_disc_err = self.e_T_disc - self.e_A_disc
-            s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
-            if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
-                s_e_disc_new.zero_()
-            self.e_A_disc.add_(s_e_disc_new * self.l_t)
-            self.s_e_disc = s_e_disc_new
+        diff_disc_err = self.e_T_disc - self.e_A_disc
+        diff_gen_err = self.e_T_gen - self.e_A_gen
+        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
+        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
+        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+            s_e_disc_new.zero_()
+            s_e_gen_new.zero_()
 
-            if self.s_e_disc_prev is None or self.s_e_disc_prev.shape != self.s_e_disc.shape:
-                self.s_e_disc_prev = torch.zeros_like(self.s_e_disc)
-            self.s_e_disc_prev.copy_(self.s_e_disc)
-
-        elif bottomup_mask:
-            diff_gen_err = self.e_T_gen - self.e_A_gen
-            s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
-            if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
-                s_e_gen_new.zero_()
-            self.e_A_gen.add_(s_e_gen_new * self.l_t)
-            self.s_e_gen = s_e_gen_new
-
-            if self.s_e_gen_prev is None or self.s_e_gen_prev.shape != self.s_e_gen.shape:
-                self.s_e_gen_prev = torch.zeros_like(self.s_e_gen)
-            self.s_e_gen_prev.copy_(self.s_e_gen)
+        self.e_A_disc.add_(s_e_disc_new * self.l_t)
+        self.e_A_gen.add_(s_e_gen_new * self.l_t)
+        self.s_e_disc = s_e_disc_new
+        self.s_e_gen = s_e_gen_new
 
         # publish for next tick
         if self.s_A_prev is None or self.s_A_prev.shape != self.s_A.shape:
             self.s_A_prev = torch.zeros_like(self.s_A)
+        if self.s_e_disc_prev is None or self.s_e_disc_prev.shape != self.s_e_disc.shape:
+            self.s_e_disc_prev = torch.zeros_like(self.s_e_disc)
+        if self.s_e_gen_prev is None or self.s_e_gen_prev.shape != self.s_e_gen.shape:
+            self.s_e_gen_prev = torch.zeros_like(self.s_e_gen)
         self.s_A_prev.copy_(self.s_A)
+        self.s_e_disc_prev.copy_(self.s_e_disc)
+        self.s_e_gen_prev.copy_(self.s_e_gen)
 
         if sample_step_override is not None:
             self.time_step = int(sample_step_override) + 1
@@ -332,7 +329,9 @@ class DiffPCNetworkTorch(nn.Module):
         else: self._clamp_switch[layer_index-1], self._data_bucket[layer_index-1] = clamp, data
 
     @torch.no_grad()
-    def _build_s_in_and_e_in(self, topdown_mask: bool, bottomup_mask:bool):
+    def _build_s_in_and_e_in(self):
+        s_in_disc, s_in_gen, e_in_disc, e_in_gen = [], [], [], []
+
         sd = self.layers[0].sampling_duration if len(self.layers) > 0 else 1
         t  = self._global_step % sd
 
@@ -344,52 +343,38 @@ class DiffPCNetworkTorch(nn.Module):
         else:
             bias_spike = 0.0
 
-        if topdown_mask:
-            s_in_disc, e_in_disc = [], []
+        # consume previous-tick spikes
+        prev_s_disc = self.input_driver.s_A_prev
+        prev_s_gen = self.layers[0].s_A_prev
+        for l in range(len(self.W)):
+            s_in_disc_l = prev_s_disc @ self.W[l].T
+            s_in_gen_l = prev_s_gen @ self.V[l].T
 
-            prev_s_disc = self.input_driver.s_A_prev
-            for l in range(len(self.W)):
-                s_in_disc_l = prev_s_disc @ self.W[l].T
+            if bias_spike != 0.0:
+                s_in_disc_l.add_(self.W_bias[l].T)
+                s_in_gen_l.add_(self.V_bias[l].T)
 
-                if bias_spike != 0.0:
-                    s_in_disc_l.add_(self.W_bias[l].T)
+            s_in_disc.append(s_in_disc_l)
+            prev_s_disc = self.layers[l].s_A_prev
+            s_in_gen.append(s_in_gen_l)
+            if l < len(self.W) - 1:
+                prev_s_gen = self.layers[l+1].s_A_prev
 
-                s_in_disc.append(s_in_disc_l)
-                prev_s_disc = self.layers[l].s_A_prev
-
-            for l in range(len(self.cfg.layer_dims)):
-                if l < len(self.cfg.layer_dims) - 1:
-                    e_in_disc_l = self.layers[l].s_e_disc_prev @ self.W[l]
-                else:
-                    e_in_disc_l = torch.zeros_like(self.layers[l-1].s_e_disc_prev)
-
-                e_in_disc.append(e_in_disc_l)
-
-            return s_in_disc, e_in_disc
-
-        elif bottomup_mask:
-            s_in_gen, e_in_gen = [], []
-
-            prev_s_gen = self.layers[0].s_A_prev
-            for l in range(len(self.W)):
-                s_in_gen_l = prev_s_gen @ self.V[l].T
-
-                if bias_spike != 0.0:
-                    s_in_gen_l.add_(self.V_bias[l].T)
-
-                s_in_gen.append(s_in_gen_l)
-                if l < len(self.W) - 1:
-                    prev_s_gen = self.layers[l+1].s_A_prev
-
-            for l in range(len(self.W)):
+        for l in range(len(self.cfg.layer_dims)):
+            if l < len(self.cfg.layer_dims) - 1:
+                e_in_disc_l = self.layers[l].s_e_disc_prev @ self.W[l]
                 if l == 0:
                     e_in_gen_l = self.input_driver.s_e_gen_prev @ self.V[l]
                 else:
                     e_in_gen_l = self.layers[l-1].s_e_gen_prev @ self.V[l]
 
-                e_in_gen.append(e_in_gen_l)
+            else:
+                e_in_disc_l = torch.zeros_like(self.layers[l-1].s_e_disc_prev)
 
-            return s_in_gen, e_in_gen
+            e_in_disc.append(e_in_disc_l)
+            e_in_gen.append(e_in_gen_l)
+
+        return s_in_disc, s_in_gen, e_in_disc, e_in_gen
 
     @torch.no_grad()
     def one_time_step(self, bottomup_mask: bool = False, topdown_mask : bool = False):
@@ -398,15 +383,6 @@ class DiffPCNetworkTorch(nn.Module):
         z_top = torch.zeros(B, self.layers[-1].dim, device=self.device)
         sd = self.input_driver.sampling_duration
         t  = self._global_step % sd
-
-        if topdown_mask:
-            s_in_disc, e_in_disc = self._build_s_in_and_e_in()
-            self.input_driver.step(clamp_status=self.input_driver_clamp, data_in=self.input_driver_data, 
-                                   e_in_disc=e_in_disc[0], bottomup_mask=bottomup_mask, topdown_mask=topdown_mask, sample_step_override=t)
-            for i, lyr in enumerate(self.layers):
-                lyr.step(clamp_status=self._clamp_switch[i], data_in=self._data_bucket[i],
-                        s_in_disc=s_in_disc[i], e_in_disc=e_in_disc[i+1],
-                        bottomup_mask=bottomup_mask, topdown_mask=topdown_mask, sample_step_override=t)
 
         s_in_disc, s_in_gen, e_in_disc, e_in_gen = self._build_s_in_and_e_in()
         s_in_gen.append(z_top)
@@ -722,6 +698,8 @@ if __name__ == "__main__":
         gamma_every_n=None,
         t_init_cycles=15,
         phase2_cycles=15,
+        alpha_disc = 1,
+        alpha_gen = 0.0001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
