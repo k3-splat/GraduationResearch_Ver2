@@ -197,10 +197,12 @@ class DiffPCLayerTorch(nn.Module):
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
         self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
         self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
+        
+        # [MODIFIED]: Masks are applied regardless of ff_init_duration
+        if bottomup_mask:
             self.x_F_disc.zero_()
             self.e_T_disc.zero_()
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and topdown_mask:
+        if topdown_mask:
             self.x_F_gen.zero_()
             self.e_T_gen.zero_()
 
@@ -219,8 +221,12 @@ class DiffPCLayerTorch(nn.Module):
         diff_gen_err = self.e_T_gen - self.e_A_gen
         s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
         s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
-        if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
+        
+        # [MODIFIED]: Error spikes are suppressed if masks are active
+        is_init_phase = hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration
+        if is_init_phase or bottomup_mask:
             s_e_disc_new.zero_()
+        if is_init_phase or topdown_mask:
             s_e_gen_new.zero_()
 
         self.e_A_disc.add_(s_e_disc_new * self.l_t)
@@ -327,6 +333,32 @@ class DiffPCNetworkTorch(nn.Module):
     def set_clamp(self, layer_index: int, clamp: bool, data: Optional[torch.Tensor] = None):
         if layer_index == 0: self.input_driver_clamp, self.input_driver_data = clamp, data
         else: self._clamp_switch[layer_index-1], self._data_bucket[layer_index-1] = clamp, data
+
+    # [NEW FEATURE]: Method to freeze a layer to its current state
+    def clamp_layer_to_current_state(self, layer_index: int):
+        """
+        指定されたレイヤーの現在の状態(x_T)をクローンし、
+        その値でクランプ(固定)します。
+        layer_index: 0=input_driver, 1=layers[0], 2=layers[1], ...
+        """
+        # 1. 対象レイヤーを特定
+        if layer_index == 0:
+            target_layer = self.input_driver
+        elif 0 < layer_index <= len(self.layers):
+            target_layer = self.layers[layer_index - 1]
+        else:
+            raise ValueError(f"Invalid layer_index: {layer_index}")
+
+        # 2. 現在の状態が存在するか確認
+        if target_layer.x_T is None:
+            raise RuntimeError(f"Layer {layer_index} has no state (x_T is None). "
+                               "Run at least one step or allocate before clamping.")
+
+        # 3. 現在の値を複製して保存 (計算グラフから切り離すためdetach推奨)
+        current_data = target_layer.x_T.clone().detach()
+
+        # 4. 既存のset_clampを使って固定
+        self.set_clamp(layer_index, True, current_data)
 
     @torch.no_grad()
     def _build_s_in_and_e_in(self):
@@ -445,6 +477,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
+    # Note: topdown_mask=True here ensures pure bottom-up inference in Phase 1
     for _ in range(steps_phase1): net.one_time_step(bottomup_mask=False, topdown_mask=True)
 
     # Phase-2 (continue state)
@@ -458,7 +491,17 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     
     spike_stats = SpikeStats()
     for _ in range(steps_phase2):
-        net.one_time_step(bottomup_mask=False, topdown_mask=False)
+        # Note: Both masks False here allows bidirectional flow (Deep Learning)
+        net.one_time_step(bottomup_mask=False, topdown_mask=True)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+    for li in range(1, len(net.layers)): net.clamp_layer_to_current_state(li)
+    for _ in range(steps_phase2):
+        # Note: Both masks False here allows bidirectional flow (Deep Learning)
+        net.one_time_step(bottomup_mask=True, topdown_mask=False)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
@@ -488,6 +531,7 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     
     spike_stats = SpikeStats()
     for _ in range(steps):
+        # Force bottom-up only inference
         net.one_time_step(bottomup_mask=False, topdown_mask=True)
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
@@ -495,6 +539,76 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
             
     return net.layers[-1].x_T.clone(), spike_stats
+
+@torch.no_grad()
+def infer_batch_backword_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    lt_n = l_t_spec["args"]["n"]
+    steps = cfg.t_init_cycles * lt_n
+    net.set_sampling_duration(steps)
+    net.reset_all_states(y_onehot.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+    y_forward = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_forward)
+
+    net.set_training(False)                 # v2: no dropout in inference
+
+    net.set_clamp(len(net.layers), True, y_onehot)
+    for li in range(0, len(net.layers)): net.set_clamp(li, False)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps):
+        # Force bottom-up only inference
+        net.one_time_step(bottomup_mask=True, topdown_mask=False)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+            
+    return net.layers[-1].x_T.clone(), spike_stats
+
+# =========================
+#  Visualization Wrapper
+# =========================
+
+def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
+                               l_t_spec: dict, y_phase2_spec: dict, 
+                               epoch: int, output_dir: str = "gen_results"):
+    """
+    0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    device = net.device
+    
+    # 0~9のラベルを作成
+    labels = torch.arange(10, device=device)
+    # One-hotエンコーディング
+    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
+    
+    # 生成を実行 (Batch=10, Dim=784)
+    generated_data, _ = infer_batch_backword_only(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
+    
+    # 画像形状にリシェイプ (Batch, 1, 28, 28)
+    gen_imgs = generated_data.view(10, 1, 28, 28)
+    
+    # 正規化の解除 (Denormalize)
+    if cfg.normalize:
+        if cfg.use_fashion_mnist:
+            mean, std = 0.2860, 0.3530
+        else:
+            mean, std = 0.1307, 0.3081
+        gen_imgs = gen_imgs * std + mean
+    
+    # 範囲を[0, 1]にクリップ
+    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
+    
+    # 画像を保存
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_gjggenerated.png")
+    save_image(gen_imgs, save_path, nrow=10)
+    print(f"Generated images saved to: {save_path}")
 
 
 # =========================
@@ -698,8 +812,8 @@ if __name__ == "__main__":
         gamma_every_n=None,
         t_init_cycles=15,
         phase2_cycles=15,
-        alpha_disc = 1,
-        alpha_gen = 0.0001,
+        alpha_disc = 1.,
+        alpha_gen = 1.,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
