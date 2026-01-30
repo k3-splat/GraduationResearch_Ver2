@@ -509,8 +509,10 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
 
+    net.apply_phase2_update()
+
     # 2b. Clamp Hidden Layers (Freeze Bottom-up state)
-    for li in range(1, len(net.layers)): net.clamp_layer_to_current_state(li)
+    # for li in range(1, len(net.layers)): net.clamp_layer_to_current_state(li)
 
     # 2c. Top-down Only Update (Block Bottom-up)
     # This generates errors for V (Top-down) but e_disc will be 0 (so W is not updated)
@@ -520,7 +522,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
-    
+
     net.apply_phase2_update()
     return net.layers[-1].x_T.clone(), spike_stats
 
@@ -590,12 +592,62 @@ def infer_batch_backword_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, c
     # [CORRECTION]: Return Input Driver's state (Generated Image), not the label
     return net.input_driver.x_T.clone(), spike_stats
 
+@torch.no_grad()
+def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    """
+    指定されたラベル(y_onehot)に基づいて画像を生成するランナー。
+    Phase 1: ラベルを固定、入力層・中間層を自由にしてトップダウン信号で状態を遷移。
+    Phase 2: 安定化のため継続実行 (学習時と同様のダイナミクスを担保)。
+    """
+    lt_n = l_t_spec["args"]["n"]
+    steps_phase1 = cfg.t_init_cycles * lt_n
+    steps_phase2 = cfg.phase2_cycles * lt_n
+    
+    net.set_sampling_duration(steps_phase1 + steps_phase2)
+    net.reset_all_states(y_onehot.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+
+    # Phase-1: Generation (Top-down settling)
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase1)
+
+    net.set_training(False)
+
+    # 変更点: ラベル層(最上位)を固定し、入力層(input_driver)を含む他層をunclampする
+    net.set_clamp(len(net.layers), True, y_onehot)
+    for li in range(0, len(net.layers)): net.set_clamp(li, False)
+    
+    # Phase 1: トップダウンで夢を見させる (bottomup_mask=True でボトムアップ信号を切る設定が一般的)
+    for _ in range(steps_phase1): net.one_time_step(bottomup_mask=True, topdown_mask=False)
+
+    # Phase-2 (continue state)
+    y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
+    l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_phase2)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps_phase2):
+        net.one_time_step(bottomup_mask=True, topdown_mask=False)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+    # 変更点: 生成された画像データ(input_driverの状態)を返す
+    return net.input_driver.x_T.clone(), spike_stats
+
 # =========================
 #  Visualization Wrapper
 # =========================
 
 def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
-                               l_t_spec: dict, epoch: int, output_dir: str = "gen_results"):
+                               l_t_spec: dict, y_phase2_spec: dict, 
+                               epoch: int, output_dir: str = "gen_results"):
     """
     0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
     """
@@ -608,7 +660,7 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
     
     # 生成を実行 (Batch=10, Dim=784)
-    generated_data, _ = infer_batch_backword_only(net, y_onehot, cfg, l_t_spec)
+    generated_data, _ = run_batch_gen_test_two_phase(net, y_onehot, cfg, l_t_spec, y_phase2_spec)
     
     # 画像形状にリシェイプ (Batch, 1, 28, 28)
     gen_imgs = generated_data.view(10, 1, 28, 28)
@@ -625,7 +677,7 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
     
     # 画像を保存
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generated.png")
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generatedcycle.png")
     save_image(gen_imgs, save_path, nrow=10)
     print(f"Generated images saved to: {save_path}")
 
@@ -776,7 +828,7 @@ def main(cfg: DiffPCConfig):
         )
         
         # [NEW]: Visualize generation every epoch
-        visualize_generated_digits(net, cfg, l_t_spec, epoch)
+        visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch)
 
         run_results.append({
             "epoch": epoch,
