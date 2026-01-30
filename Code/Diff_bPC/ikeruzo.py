@@ -790,9 +790,10 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
 
-    # 画像生成の可視化
-    print(f"Generating digits for epoch {epoch}...")
-    visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
+        if epoch % 5 == 0:
+            # 画像生成の可視化
+            print(f"Generating digits for epoch {epoch}...")
+            visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
 
     # Save
     with open(log_path, "w") as f:
@@ -838,7 +839,7 @@ if __name__ == "__main__":
         t_init_cycles=15,
         phase2_cycles=20,
         alpha_disc = 1,
-        alpha_gen = 0.01,
+        alpha_gen = 0.0225,
         pc_lr=0.0001,
         batch_size=256,
         epochs=25,
