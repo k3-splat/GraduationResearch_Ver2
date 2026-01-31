@@ -26,6 +26,7 @@ class DiffPCConfig:
     gamma_value: float = 0.2; gamma_every_n: Optional[int] = None
     t_init_cycles: int = 15; phase2_cycles: int = 15
     alpha_disc: float = 1.0; alpha_gen: float = 1e-4
+    s_A_threshold: float = 1.0; s_e_disc_threshold: float = 1.0; s_e_gen_threshold: float = 1.0
     pc_lr: float = 5e-4
     batch_size: int = 256; epochs: int = 125
     use_adamw: bool = True
@@ -212,20 +213,20 @@ class DiffPCLayerTorch(nn.Module):
             self.x_T.add_(self.y * (-self.alpha_disc * self.e_T_disc - self.alpha_gen * self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
-        s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
-        s_A_new = s_A_new * ((self.x_A + s_A_new * self.l_t) > 0.0)
-        self.x_A.add_(s_A_new * self.l_t); self.s_A = s_A_new
+        s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.s_A_threshold * self.l_t)
+        s_A_new = s_A_new * ((self.x_A + s_A_new * self.s_A_threshold * self.l_t) > 0.0)
+        self.x_A.add_(s_A_new * self.s_A_threshold * self.l_t); self.s_A = s_A_new
         
         diff_disc_err = self.e_T_disc - self.e_A_disc
         diff_gen_err = self.e_T_gen - self.e_A_gen
-        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
-        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
+        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.s_e_disc_threshold * self.l_t)
+        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.s_e_gen_threshold * self.l_t)
         if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
             s_e_disc_new.zero_()
             s_e_gen_new.zero_()
 
-        self.e_A_disc.add_(s_e_disc_new * self.l_t)
-        self.e_A_gen.add_(s_e_gen_new * self.l_t)
+        self.e_A_disc.add_(s_e_disc_new * self.s_e_disc_threshold * self.l_t)
+        self.e_A_gen.add_(s_e_gen_new * self.s_e_gen_threshold * self.l_t)
         self.s_e_disc = s_e_disc_new
         self.s_e_gen = s_e_gen_new
 
@@ -292,7 +293,9 @@ class DiffPCNetworkTorch(nn.Module):
         y_sched = get_y_scheduler(y_scheduler_spec["type"], {**y_scheduler_spec["args"], "l_t_scheduler": l_t_sched})
         layer_args = {"sampling_duration": 1, "learning_weights": True, "training": True,
                       "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, 
-                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen, "device": self.device}
+                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen, 
+                      "s_A_threshold": cfg.s_A_threshold, "s_e_disc_threshold": cfg.s_e_disc_threshold, "s_e_gen_threshold": cfg.s_e_gen_threshold,
+                      "device": self.device}
         self.layers = nn.ModuleList([DiffPCLayerTorch(dim=d, **layer_args) for d in cfg.layer_dims[1:]])
         self.input_driver = DiffPCLayerTorch(dim=cfg.layer_dims[0], **layer_args)
 
@@ -771,6 +774,9 @@ if __name__ == "__main__":
         phase2_cycles=15,
         alpha_disc = 1,
         alpha_gen = 0.02,
+        s_A_threshold = 2,
+        s_e_disc_threshold = 1,
+        s_e_gen_threshold = 16,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
