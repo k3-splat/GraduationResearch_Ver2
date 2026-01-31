@@ -685,7 +685,7 @@ def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
 if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
-        lt_m=0,
+        lt_m=4,
         lt_n=5,
         lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
@@ -695,7 +695,7 @@ if __name__ == "__main__":
         phase2_cycles=15,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=200,
+        epochs=10,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),

@@ -1,0 +1,8 @@
+Starting bPC Experiment.
+
+Skipping Hyperparameter Search... Using Fixed Params.
+
+============================================================
+PHASE 2: Final Training (Fixed Epochs: 40)
+Using Params: {'activation': 'tanh', 'lr_activities': 0.001238616884883715, 'momentum': 0.9, 'lr_weights': 9.619920786823702e-05, 'weight_decay': 0.0029641169521327153, 'alpha_gen': 0.01, 'alpha_disc': 1.0, 'T_train': 8, 'T_eval': 100}
+============================================================

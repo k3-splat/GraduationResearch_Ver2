@@ -43,7 +43,7 @@ COMMON_CONFIG = {
     # True : Optunaによる探索を実行 (Table 5の設定を使用)
     # False: 探索をスキップし、下記 'fixed_params' で学習・生成のみ実行
     # -----------------------------------------------------------
-    'run_search': True,  # ★ここを False にすれば探索なしモードになります
+    'run_search': False,  # ★ここを False にすれば探索なしモードになります
 
     # 探索設定 (Table 5準拠)
     'search_trials': 20,    # 探索回数 (必要に応じて増やしてください)
@@ -441,12 +441,18 @@ def calculate_pass_costs(model, batch_size):
         fpo += (batch_size * n_in * n_out) * 2
     return dm_bytes, fpo
 
+# =============================================================================
+# [Phase 2] 学習 (修正版)
+# =============================================================================
 def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path):
     epochs = COMMON_CONFIG['final_epochs']
     print("\n" + "="*60)
-    print(f"PHASE 2: Final Training (Fixed Epochs: {epochs})")
-    print(f"Using Params: {best_params}")
+    print(f"PHASE 2: Final Training with Raw Error Tracking")
     print("="*60)
+    
+    # ヘッダーに Raw Abs Error (生の絶対誤差) を追加
+    print(f"{'Epoch':<5} | {'Acc(%)':<8} | {'RawGenAbs':<10} | {'RawDiscAbs':<10} | {'GenLoss':<8} | {'DiscLoss':<8}")
+    print("-" * 75)
     
     device = torch.device(COMMON_CONFIG['device'])
     model = bPC_Net(COMMON_CONFIG['hidden_size'], best_params['activation']).to(device)
@@ -454,23 +460,22 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path):
     
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Epoch', 'Accuracy', 'Total_G_FPO', 'Total_GB_Data', 'Time_s'])
+        writer.writerow(['Epoch', 'Accuracy', 'Raw_Gen_Abs', 'Raw_Disc_Abs', 'Weighted_Gen_Loss', 'Weighted_Disc_Loss', 'Time_s'])
 
-    total_fpo = 0.0
-    total_dm = 0.0
     start_time = time.time()
-    acc = 0.0
     
     for epoch in range(1, epochs + 1):
         model.train()
+        epoch_raw_gen_abs = 0.0
+        epoch_raw_disc_abs = 0.0
+        epoch_weighted_gen = 0.0
+        epoch_weighted_disc = 0.0
+        
         for batch_idx, (images, labels) in enumerate(train_loader):
             images, labels = images.to(device), labels.to(device)
-            bs = images.size(0)
             
+            # 推論フェーズ (活動 x の更新)
             activities = model.forward_init(images)
-            dm, fpo = calculate_pass_costs(model, bs)
-            total_dm += dm; total_fpo += fpo
-            
             with torch.no_grad():
                 final_activities = model.run_inference(
                     activities, images, labels, 
@@ -479,39 +484,60 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path):
                     alpha_gen=best_params['alpha_gen'], alpha_disc=best_params['alpha_disc'], 
                     is_training=True
                 )
-            dm, fpo = calculate_pass_costs(model, bs)
-            total_dm += dm * 4 * best_params['T_train']
-            total_fpo += fpo * 4 * best_params['T_train']
             
             optimizer.zero_grad()
-            loss_total = 0
+            batch_weighted_gen = 0.0
+            batch_weighted_disc = 0.0
+            batch_raw_gen_abs = 0.0
+            batch_raw_disc_abs = 0.0
+            
             x = final_activities
             for l in range(len(model.layers)):
                 layer = model.layers[l]
-                if l < len(model.layers):
-                    pred_up = layer.V(layer.activation(x[l].detach()))
-                    loss_total += 0.5 * best_params['alpha_disc'] * torch.sum((x[l+1].detach() - pred_up)**2)
+                
+                # --- 識別的予測誤差 (Discriminative: x[l] -> x[l+1]) ---
+                pred_up = layer.V(layer.activation(x[l].detach()))
+                diff_disc = x[l+1].detach() - pred_up
+                # 補正前の絶対値誤差を蓄積
+                batch_raw_disc_abs += torch.sum(torch.abs(diff_disc)).item()
+                # 学習用の重み付き二乗誤差
+                batch_weighted_disc += 0.5 * best_params['alpha_disc'] * torch.sum(diff_disc**2)
+                
+                # --- 生成的予測誤差 (Generative: x[l+1] -> x[l]) ---
                 pred_down = layer.W(layer.activation(x[l+1].detach()))
-                loss_total += 0.5 * best_params['alpha_gen'] * torch.sum((x[l].detach() - pred_down)**2)
+                diff_gen = x[l].detach() - pred_down
+                # 補正前の絶対値誤差を蓄積
+                batch_raw_gen_abs += torch.sum(torch.abs(diff_gen)).item()
+                # 学習用の重み付き二乗誤差
+                batch_weighted_gen += 0.5 * best_params['alpha_gen'] * torch.sum(diff_gen**2)
             
+            # 勾配計算と更新
+            loss_total = batch_weighted_gen + batch_weighted_disc
             loss_total.backward()
             optimizer.step()
             
-            dm, fpo = calculate_pass_costs(model, bs)
-            total_dm += dm * 2; total_fpo += fpo * 2
+            # エポック統計の更新
+            epoch_raw_gen_abs += batch_raw_gen_abs
+            epoch_raw_disc_abs += batch_raw_disc_abs
+            epoch_weighted_gen += batch_weighted_gen.item()
+            epoch_weighted_disc += batch_weighted_disc.item()
             
-        # Test Splitを使用
+        # 平均値の算出 (1サンプルあたりの誤差)
+        num_samples = len(train_loader.dataset)
+        avg_raw_gen = epoch_raw_gen_abs / num_samples
+        avg_raw_disc = epoch_raw_disc_abs / num_samples
+        
+        # 評価
         acc = run_validation_acc(model, test_loader, device, best_params)
         elapsed = time.time() - start_time
         
-        print(f"{epoch:<6} | {acc:<10.2f} | {total_fpo/1e9:<10.2f} | {total_dm/1e9:<10.2f}")
+        # ログ出力
+        print(f"{epoch:<5} | {acc:<8.2f} | {avg_raw_gen:<10.4f} | {avg_raw_disc:<10.4f} | {epoch_weighted_gen/num_samples:<8.4f} | {epoch_weighted_disc/num_samples:<8.4f}")
         
         with open(csv_path, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([epoch, acc, total_fpo/1e9, total_dm/1e9, elapsed])
+            writer.writerow([epoch, acc, avg_raw_gen, avg_raw_disc, epoch_weighted_gen/num_samples, epoch_weighted_disc/num_samples, elapsed])
 
-    print("\n=== Final Report ===")
-    print(f"Final Accuracy: {acc:.2f}%")
     return model
 
 # =============================================================================

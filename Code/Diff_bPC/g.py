@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torchvision.utils import save_image
 
 
 # =========================
@@ -26,7 +25,6 @@ class DiffPCConfig:
     gamma_value: float = 0.2; gamma_every_n: Optional[int] = None
     t_init_cycles: int = 15; phase2_cycles: int = 15
     alpha_disc: float = 1.0; alpha_gen: float = 1e-4
-    s_A_threshold: float = 1.0; s_e_disc_threshold: float = 1.0; s_e_gen_threshold: float = 1.0
     pc_lr: float = 5e-4
     batch_size: int = 256; epochs: int = 125
     use_adamw: bool = True
@@ -197,8 +195,8 @@ class DiffPCLayerTorch(nn.Module):
 
         self.x_F_disc.add_(self.s_in_disc * l_t_prev)
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
-        self.e_T_disc = (self.x_T - self.x_F_disc)
-        self.e_T_gen = (self.x_T - self.x_F_gen)
+        self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
+        self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
         if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
             self.x_F_disc.zero_()
             self.e_T_disc.zero_()
@@ -210,23 +208,23 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.alpha_disc * self.e_T_disc - self.alpha_gen * self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
-        s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.s_A_threshold * self.l_t)
-        s_A_new = s_A_new * ((self.x_A + s_A_new * self.s_A_threshold * self.l_t) > 0.0)
-        self.x_A.add_(s_A_new * self.s_A_threshold * self.l_t); self.s_A = s_A_new
+        s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
+        s_A_new = s_A_new * ((self.x_A + s_A_new * self.l_t) > 0.0)
+        self.x_A.add_(s_A_new * self.l_t); self.s_A = s_A_new
         
         diff_disc_err = self.e_T_disc - self.e_A_disc
         diff_gen_err = self.e_T_gen - self.e_A_gen
-        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.s_e_disc_threshold * self.l_t)
-        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.s_e_gen_threshold * self.l_t)
+        s_e_disc_new = torch.sign(diff_disc_err) * (diff_disc_err.abs() > self.l_t)
+        s_e_gen_new = torch.sign(diff_gen_err) * (diff_gen_err.abs() > self.l_t)
         if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration:
             s_e_disc_new.zero_()
             s_e_gen_new.zero_()
 
-        self.e_A_disc.add_(s_e_disc_new * self.s_e_disc_threshold * self.l_t)
-        self.e_A_gen.add_(s_e_gen_new * self.s_e_gen_threshold * self.l_t)
+        self.e_A_disc.add_(s_e_disc_new * self.l_t)
+        self.e_A_gen.add_(s_e_gen_new * self.l_t)
         self.s_e_disc = s_e_disc_new
         self.s_e_gen = s_e_gen_new
 
@@ -293,9 +291,7 @@ class DiffPCNetworkTorch(nn.Module):
         y_sched = get_y_scheduler(y_scheduler_spec["type"], {**y_scheduler_spec["args"], "l_t_scheduler": l_t_sched})
         layer_args = {"sampling_duration": 1, "learning_weights": True, "training": True,
                       "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, 
-                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen, 
-                      "s_A_threshold": cfg.s_A_threshold, "s_e_disc_threshold": cfg.s_e_disc_threshold, "s_e_gen_threshold": cfg.s_e_gen_threshold,
-                      "device": self.device}
+                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen, "device": self.device}
         self.layers = nn.ModuleList([DiffPCLayerTorch(dim=d, **layer_args) for d in cfg.layer_dims[1:]])
         self.input_driver = DiffPCLayerTorch(dim=cfg.layer_dims[0], **layer_args)
 
@@ -501,77 +497,6 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     return net.layers[-1].x_T.clone(), spike_stats
 
 
-@torch.no_grad()
-def infer_batch_backward_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
-    lt_n = l_t_spec["args"]["n"]
-    steps = cfg.t_init_cycles * lt_n
-    net.set_sampling_duration(steps)
-    net.reset_all_states(y_onehot.size(0))
-    net._bias_fired_once = False
-    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps
-    
-    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-    y_forward = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
-    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_forward)
-
-    net.set_training(False)                 # v2: no dropout in inference
-
-    net.set_clamp(len(net.layers), True, y_onehot)
-    for li in range(0, len(net.layers)): net.set_clamp(li, False)
-    
-    spike_stats = SpikeStats()
-    for _ in range(steps):
-        net.one_time_step(bottomup_mask=True, topdown_mask=False)
-        for lyr in net.layers:
-            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
-            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
-            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
-            
-    return net.input_driver.x_T.clone(), spike_stats
-
-
-def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
-                               l_t_spec: dict, 
-                               epoch: int, output_dir: str = "gen_results"):
-    """
-    0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
-    ファイル名にはエポック数と実行時の日時が含まれます。
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    device = net.device
-    
-    # 現在の日時を文字列で取得 (例: 20231027_153045)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 0~9のラベルを作成
-    labels = torch.arange(10, device=device)
-    # One-hotエンコーディング
-    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
-    
-    # 生成を実行 (Batch=10, Dim=784)
-    generated_data, _ = infer_batch_backward_only(net, y_onehot, cfg, l_t_spec)
-    
-    # 画像形状にリシェイプ (Batch, 1, 28, 28)
-    gen_imgs = generated_data.view(10, 1, 28, 28)
-    
-    # 正規化の解除 (Denormalize)
-    if cfg.normalize:
-        if cfg.use_fashion_mnist:
-            mean, std = 0.2860, 0.3530
-        else:
-            mean, std = 0.1307, 0.3081
-        gen_imgs = gen_imgs * std + mean
-    
-    # 範囲を[0, 1]にクリップ
-    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
-    
-    # 画像を保存 (ファイル名に日時を追加)
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_{timestamp}.png")
-    save_image(gen_imgs, save_path, nrow=10)
-    print(f"Generated images saved to: {save_path}")
-
-
 # =========================
 #  MNIST training wrapper
 # =========================
@@ -718,9 +643,6 @@ def main(cfg: DiffPCConfig):
             f"Avg Spikes/N (Test P1):  s_a={avg_sa_test_p1:.2f}, s_e_disc={avg_se_disc_test_p1:.2f}, s_e_gen={avg_se_gen_test_p1:.2f}"
         )
 
-        print(f"Generating digits for epoch {epoch}...")
-        visualize_generated_digits(net, cfg, l_t_spec, epoch)
-
         run_results.append({
             "epoch": epoch,
             "train_acc": train_acc,
@@ -769,7 +691,7 @@ if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
         lt_m=0,
-        lt_n=6,
+        lt_n=5,
         lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
@@ -778,9 +700,6 @@ if __name__ == "__main__":
         phase2_cycles=15,
         alpha_disc = 1,
         alpha_gen = 0.01,
-        s_A_threshold = 2,
-        s_e_disc_threshold = 1,
-        s_e_gen_threshold = 16,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,

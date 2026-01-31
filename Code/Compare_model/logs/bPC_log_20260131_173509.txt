@@ -1,0 +1,46 @@
+
+============================================================
+PHASE 2: Final Training (Fixed Epochs: 40)
+============================================================
+Epoch 1   | Acc: 85.88  | FPO(G): 2005.92 | DM(GB): 35.82 
+Epoch 2   | Acc: 87.82  | FPO(G): 4011.84 | DM(GB): 71.65 
+Epoch 3   | Acc: 88.66  | FPO(G): 6017.76 | DM(GB): 107.47
+Epoch 4   | Acc: 89.88  | FPO(G): 8023.68 | DM(GB): 143.29
+Epoch 5   | Acc: 91.30  | FPO(G): 10029.60 | DM(GB): 179.11
+Epoch 6   | Acc: 91.22  | FPO(G): 12035.52 | DM(GB): 214.94
+Epoch 7   | Acc: 92.10  | FPO(G): 14041.44 | DM(GB): 250.76
+Epoch 8   | Acc: 92.30  | FPO(G): 16047.36 | DM(GB): 286.58
+Epoch 9   | Acc: 93.00  | FPO(G): 18053.28 | DM(GB): 322.40
+Epoch 10  | Acc: 93.46  | FPO(G): 20059.20 | DM(GB): 358.23
+Epoch 11  | Acc: 93.56  | FPO(G): 22065.12 | DM(GB): 394.05
+Epoch 12  | Acc: 94.00  | FPO(G): 24071.04 | DM(GB): 429.87
+Epoch 13  | Acc: 94.06  | FPO(G): 26076.96 | DM(GB): 465.69
+Epoch 14  | Acc: 94.48  | FPO(G): 28082.88 | DM(GB): 501.52
+Epoch 15  | Acc: 94.70  | FPO(G): 30088.80 | DM(GB): 537.34
+Epoch 16  | Acc: 94.80  | FPO(G): 32094.72 | DM(GB): 573.16
+Epoch 17  | Acc: 94.98  | FPO(G): 34100.64 | DM(GB): 608.98
+Epoch 18  | Acc: 94.98  | FPO(G): 36106.56 | DM(GB): 644.81
+Epoch 19  | Acc: 95.22  | FPO(G): 38112.48 | DM(GB): 680.63
+Epoch 20  | Acc: 95.38  | FPO(G): 40118.40 | DM(GB): 716.45
+Epoch 21  | Acc: 95.46  | FPO(G): 42124.32 | DM(GB): 752.28
+Epoch 22  | Acc: 95.46  | FPO(G): 44130.24 | DM(GB): 788.10
+Epoch 23  | Acc: 95.64  | FPO(G): 46136.16 | DM(GB): 823.92
+Epoch 24  | Acc: 95.52  | FPO(G): 48142.08 | DM(GB): 859.74
+Epoch 25  | Acc: 95.74  | FPO(G): 50148.00 | DM(GB): 895.57
+Epoch 26  | Acc: 95.82  | FPO(G): 52153.92 | DM(GB): 931.39
+Epoch 27  | Acc: 95.88  | FPO(G): 54159.84 | DM(GB): 967.21
+Epoch 28  | Acc: 95.92  | FPO(G): 56165.76 | DM(GB): 1003.03
+Epoch 29  | Acc: 95.86  | FPO(G): 58171.68 | DM(GB): 1038.86
+Epoch 30  | Acc: 95.96  | FPO(G): 60177.60 | DM(GB): 1074.68
+Epoch 31  | Acc: 95.94  | FPO(G): 62183.52 | DM(GB): 1110.50
+Epoch 32  | Acc: 96.20  | FPO(G): 64189.44 | DM(GB): 1146.32
+Epoch 33  | Acc: 96.10  | FPO(G): 66195.36 | DM(GB): 1182.15
+Epoch 34  | Acc: 96.22  | FPO(G): 68201.28 | DM(GB): 1217.97
+Epoch 35  | Acc: 96.14  | FPO(G): 70207.20 | DM(GB): 1253.79
+Epoch 36  | Acc: 96.30  | FPO(G): 72213.12 | DM(GB): 1289.62
+Epoch 37  | Acc: 96.32  | FPO(G): 74219.04 | DM(GB): 1325.44
+Epoch 38  | Acc: 96.22  | FPO(G): 76224.96 | DM(GB): 1361.26
+Epoch 39  | Acc: 96.28  | FPO(G): 78230.88 | DM(GB): 1397.08
+Epoch 40  | Acc: 96.42  | FPO(G): 80236.80 | DM(GB): 1432.91
+
+Experiment Finished.
