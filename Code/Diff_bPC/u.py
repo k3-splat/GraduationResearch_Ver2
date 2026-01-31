@@ -536,9 +536,13 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
                                epoch: int, output_dir: str = "gen_results"):
     """
     0から9までの数字ラベルをネットワークに与え、生成された画像を保存します。
+    ファイル名にはエポック数と実行時の日時が含まれます。
     """
     os.makedirs(output_dir, exist_ok=True)
     device = net.device
+    
+    # 現在の日時を文字列で取得 (例: 20231027_153045)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 0~9のラベルを作成
     labels = torch.arange(10, device=device)
@@ -562,8 +566,8 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     # 範囲を[0, 1]にクリップ
     gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
     
-    # 画像を保存
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_.png")
+    # 画像を保存 (ファイル名に日時を追加)
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_{timestamp}.png")
     save_image(gen_imgs, save_path, nrow=10)
     print(f"Generated images saved to: {save_path}")
 
