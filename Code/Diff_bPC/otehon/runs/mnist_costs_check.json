@@ -1,0 +1,239 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 15,
+        "phase2_cycles": 15,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 20,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_costs_check",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 2,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 85.56666666666666,
+            "test_acc": 90.98,
+            "avg_spikes_per_neuron_train_p2_sa": 0.03912963414634146,
+            "avg_spikes_per_neuron_train_p2_se": 0.02252109756097561,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.68900455562
+        },
+        {
+            "epoch": 2,
+            "train_acc": 90.18666666666667,
+            "test_acc": 93.98,
+            "avg_spikes_per_neuron_train_p2_sa": 0.030346544715447156,
+            "avg_spikes_per_neuron_train_p2_se": 0.018900162601626018,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.32710250928
+        },
+        {
+            "epoch": 3,
+            "train_acc": 92.49166666666666,
+            "test_acc": 95.36,
+            "avg_spikes_per_neuron_train_p2_sa": 0.027486341463414634,
+            "avg_spikes_per_neuron_train_p2_se": 0.01757211382113821,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.58498775645
+        },
+        {
+            "epoch": 4,
+            "train_acc": 93.55666666666667,
+            "test_acc": 96.07,
+            "avg_spikes_per_neuron_train_p2_sa": 0.026153373983739837,
+            "avg_spikes_per_neuron_train_p2_se": 0.01660991869918699,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.27028781193
+        },
+        {
+            "epoch": 5,
+            "train_acc": 94.30833333333334,
+            "test_acc": 96.46,
+            "avg_spikes_per_neuron_train_p2_sa": 0.025094308943089432,
+            "avg_spikes_per_neuron_train_p2_se": 0.015968658536585367,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100054.99762166485
+        },
+        {
+            "epoch": 6,
+            "train_acc": 94.84666666666666,
+            "test_acc": 96.62,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02456252032520325,
+            "avg_spikes_per_neuron_train_p2_se": 0.01552670731707317,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100053.86603744571
+        },
+        {
+            "epoch": 7,
+            "train_acc": 95.11666666666666,
+            "test_acc": 96.88,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02396861788617886,
+            "avg_spikes_per_neuron_train_p2_se": 0.015078780487804878,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100054.98578838813
+        },
+        {
+            "epoch": 8,
+            "train_acc": 95.42,
+            "test_acc": 97.13,
+            "avg_spikes_per_neuron_train_p2_sa": 0.023565162601626017,
+            "avg_spikes_per_neuron_train_p2_se": 0.014682073170731707,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.29246247113
+        },
+        {
+            "epoch": 9,
+            "train_acc": 95.69833333333334,
+            "test_acc": 97.18,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02329630081300813,
+            "avg_spikes_per_neuron_train_p2_se": 0.0143919918699187,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.57708877325
+        },
+        {
+            "epoch": 10,
+            "train_acc": 96.01,
+            "test_acc": 97.27,
+            "avg_spikes_per_neuron_train_p2_sa": 0.023043983739837397,
+            "avg_spikes_per_neuron_train_p2_se": 0.014111829268292683,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.48174936062
+        },
+        {
+            "epoch": 11,
+            "train_acc": 95.88166666666666,
+            "test_acc": 97.29,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02282219512195122,
+            "avg_spikes_per_neuron_train_p2_se": 0.01384821138211382,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100054.88297361758
+        },
+        {
+            "epoch": 12,
+            "train_acc": 96.145,
+            "test_acc": 97.39,
+            "avg_spikes_per_neuron_train_p2_sa": 0.0225659756097561,
+            "avg_spikes_per_neuron_train_p2_se": 0.013656178861788618,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.54180789176
+        },
+        {
+            "epoch": 13,
+            "train_acc": 96.25166666666667,
+            "test_acc": 97.54,
+            "avg_spikes_per_neuron_train_p2_sa": 0.022406869918699186,
+            "avg_spikes_per_neuron_train_p2_se": 0.013446219512195122,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.1444799001
+        },
+        {
+            "epoch": 14,
+            "train_acc": 96.44166666666666,
+            "test_acc": 97.4,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02224861788617886,
+            "avg_spikes_per_neuron_train_p2_se": 0.013259349593495935,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100057.29327829895
+        },
+        {
+            "epoch": 15,
+            "train_acc": 96.50166666666667,
+            "test_acc": 97.52,
+            "avg_spikes_per_neuron_train_p2_sa": 0.022155691056910568,
+            "avg_spikes_per_neuron_train_p2_se": 0.013101585365853659,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.43860245818
+        },
+        {
+            "epoch": 16,
+            "train_acc": 96.50833333333334,
+            "test_acc": 97.58,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02206979674796748,
+            "avg_spikes_per_neuron_train_p2_se": 0.01299410569105691,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100057.08255909522
+        },
+        {
+            "epoch": 17,
+            "train_acc": 96.71666666666667,
+            "test_acc": 97.64,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02184861788617886,
+            "avg_spikes_per_neuron_train_p2_se": 0.012784512195121951,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.56344043619
+        },
+        {
+            "epoch": 18,
+            "train_acc": 96.72166666666666,
+            "test_acc": 97.61,
+            "avg_spikes_per_neuron_train_p2_sa": 0.021730853658536584,
+            "avg_spikes_per_neuron_train_p2_se": 0.012628739837398375,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100056.47085107236
+        },
+        {
+            "epoch": 19,
+            "train_acc": 96.71166666666667,
+            "test_acc": 97.53,
+            "avg_spikes_per_neuron_train_p2_sa": 0.021643739837398375,
+            "avg_spikes_per_neuron_train_p2_se": 0.012497967479674797,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100057.54500439555
+        },
+        {
+            "epoch": 20,
+            "train_acc": 96.81,
+            "test_acc": 97.56,
+            "avg_spikes_per_neuron_train_p2_sa": 0.021563861788617886,
+            "avg_spikes_per_neuron_train_p2_se": 0.012411097560975609,
+            "avg_flops_per_batch": 25259581276.595745,
+            "avg_bytes_per_batch": 2022066382.9787233,
+            "avg_mdl_per_batch": 100055.69080032101
+        }
+    ]
+}

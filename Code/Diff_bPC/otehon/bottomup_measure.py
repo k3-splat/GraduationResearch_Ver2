@@ -35,24 +35,29 @@ class DiffPCConfig:
     seed: int = 42
     run_name: Optional[str] = None # If None, will be timestamped
     use_fashion_mnist: bool = False
-    dropout_rate: float = 0.0               # unified dropout rate
-    v1_dropout: bool = False                # choose v1 fixed-mask or v2 nn.Dropout
+    dropout_rate: float = 0.0             # unified dropout rate
+    v1_dropout: bool = False              # choose v1 fixed-mask or v2 nn.Dropout
     random_crop_padding: int = 0
-    normalize: bool = True                  # toggle Normalize(mean,std)
-    fmnist_hflip_p: float = 0.0             # optional horizontal flip prob for FMNIST train
+    normalize: bool = True                # toggle Normalize(mean,std)
+    fmnist_hflip_p: float = 0.0           # optional horizontal flip prob for FMNIST train
     device: str = "cuda"
 
 
 @dataclass
 class SpikeStats:
-    """Container for spike counts and error stats returned by runners."""
+    """Container for spike counts, error stats, and computational costs."""
     sa_total: float = 0.0
     se_total: float = 0.0
-    # --- CHANGED: Split error stats into 3 categories (Mean per Data per Neuron) ---
+    # Error stats (Mean per Data per Neuron)
     et_input: float = 0.0   # Input Layer
-    et_hidden: float = 0.0  # Hidden Layers (All intermediate layers)
+    et_hidden: float = 0.0  # Hidden Layers
     et_output: float = 0.0  # Output Layer
-    # -------------------------------------------------------------------------------
+    
+    # --- ADDED: Computational Cost Metrics ---
+    flops: float = 0.0           # Total FLOPs for the batch processing
+    data_movement_bytes: float = 0.0  # Total Memory Access (Read+Write) in Bytes
+    mdl: float = 0.0             # Minimum Description Length (Energy) at convergence
+    # -----------------------------------------
 
 # =========================
 #  Schedulers + factories
@@ -220,6 +225,30 @@ class DiffPCLayerTorch(nn.Module):
         else:
             self.time_step += 1
 
+    def get_elementwise_costs(self, batch_size: int, clamp_status: bool):
+        """Returns (FLOPs, Bytes_Moved) for element-wise ops in one step."""
+        dim = self.dim
+        # FLOPs estimation (Approximate per neuron):
+        # x_F update: add + mul = 2
+        # e_T update: sub = 1
+        # e_in_data update: add + mul = 2
+        # x_T update (if not clamped): mul + mul + sub + cond_mul = ~4-5. Say 0 if clamped.
+        # x_A update: sub + abs + cmp + mul + cond + add = ~6
+        # e_A update: similar ~6
+        # Total per neuron ~= 17 (unclamped) or 12 (clamped)
+        
+        flops_per_neuron = 12 if clamp_status else 17
+        total_flops = batch_size * dim * flops_per_neuron
+
+        # Memory Access (Bytes) estimation (Float32 = 4 bytes):
+        # Reads/Writes to state tensors (x_F, x_T, x_A, e_T, e_A, s_A, s_e, buffers)
+        # Roughly 10 state variables read/written per step per neuron.
+        # 10 vars * 4 bytes = 40 bytes per neuron per step (Read+Write mixed)
+        bytes_per_neuron = 10 * 4
+        total_bytes = batch_size * dim * bytes_per_neuron
+        
+        return total_flops, total_bytes
+
 
 # =========================
 #  Multi-layer network orchestrator
@@ -270,13 +299,16 @@ class DiffPCNetworkTorch(nn.Module):
         self._data_bucket = [None] * len(self.layers)
         
         self._global_step = 0
-        # v2 bias: fire once per run
         self._bias_fired_once = False
 
         # v1-style dropout state (used only if cfg.v1_dropout == True)
         self._v1_dropout_active: bool = False
         self._v1_drop_masks: List[Optional[torch.Tensor]] = [None] * len(self.layers)
         self._layer_dims: List[int] = list(cfg.layer_dims[1:])
+
+        # Accumulators for cost calculation
+        self._step_flops = 0.0
+        self._step_bytes = 0.0
 
     def reset_all_states(self, batch_size: int):
         for lyr in [self.input_driver, *self.layers]:
@@ -327,6 +359,10 @@ class DiffPCNetworkTorch(nn.Module):
     @torch.no_grad()
     def _build_s_in_and_e_in(self):
         s_in, e_in = [], []
+        
+        # Cost Accumulation
+        current_flops = 0.0
+        current_bytes = 0.0
 
         sd = self.layers[0].sampling_duration if len(self.layers) > 0 else 1
         t  = self._global_step % sd
@@ -341,7 +377,16 @@ class DiffPCNetworkTorch(nn.Module):
 
         # consume previous-tick spikes
         prev_s = self.input_driver.s_A_prev
+        batch_size = prev_s.size(0)
+
         for l, w in enumerate(self.W):
+            # Matrix Mult (Forward): B x Din @ Din x Dout -> B x Dout
+            # FLOPs: 2 * B * Din * Dout
+            din, dout = w.shape[1], w.shape[0]
+            current_flops += 2.0 * batch_size * din * dout
+            # Memory: Read W (4 bytes * Din * Dout)
+            current_bytes += 4.0 * din * dout
+            
             s_in_l = prev_s @ w.T
 
             if self.cfg.v1_dropout:
@@ -356,20 +401,31 @@ class DiffPCNetworkTorch(nn.Module):
 
             if bias_spike != 0.0:
                 s_in_l.add_(self.W_bias[l].T)
+                current_flops += batch_size * dout # Bias add
+
             s_in.append(s_in_l)
             prev_s = self.layers[l].s_A_prev
 
         for l in range(len(self.layers)):
             if l < len(self.layers) - 1:
-                e_in_l = self.layers[l+1].s_e_prev @ self.W[l+1]
+                # Matrix Mult (Backward): B x Dout @ Dout x Din -> B x Din
+                w_next = self.W[l+1]
+                din, dout = w_next.shape[1], w_next.shape[0]
+                current_flops += 2.0 * batch_size * dout * din
+                # Memory: Read W (4 bytes * Din * Dout) - technically read again if not cached
+                current_bytes += 4.0 * din * dout
+
+                e_in_l = self.layers[l+1].s_e_prev @ w_next
                 if self.cfg.v1_dropout:
                     # mask feedback path for v1 if next layer is masked
                     if self._v1_dropout_active and self._v1_drop_masks[l+1] is not None:
-                        e_in_l = (self.layers[l+1].s_e_prev * self._v1_drop_masks[l+1]) @ self.W[l+1]
+                        e_in_l = (self.layers[l+1].s_e_prev * self._v1_drop_masks[l+1]) @ w_next
             else:
                 e_in_l = torch.zeros_like(self.layers[l].s_e_prev)
             e_in.append(e_in_l)
 
+        self._step_flops = current_flops
+        self._step_bytes = current_bytes
         return s_in, e_in
 
     @torch.no_grad()
@@ -380,10 +436,18 @@ class DiffPCNetworkTorch(nn.Module):
         t  = self._global_step % sd
 
         s_in, e_in = self._build_s_in_and_e_in()
+        
+        # Accumulate element-wise costs
+        f, m = self.input_driver.get_elementwise_costs(B, self.input_driver_clamp)
+        self._step_flops += f; self._step_bytes += m
 
         self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, z,
                                sample_step_override=t)
+        
         for i, lyr in enumerate(self.layers):
+            f, m = lyr.get_elementwise_costs(B, self._clamp_switch[i])
+            self._step_flops += f; self._step_bytes += m
+            
             lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i],
                      sample_step_override=t)
         
@@ -413,6 +477,26 @@ class DiffPCNetworkTorch(nn.Module):
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias), self.cfg.clip_grad_norm)
         self.optimizer.step()
+    
+    def calculate_mdl(self, batch_size: int) -> float:
+        """
+        Calculates Minimum Description Length (MDL) approximation.
+        MDL = L(Data|Model) + L(Model)
+        L(Data|Model) ~ 0.5 * Sum(Squared Errors at Input Layer)
+        L(Model) ~ 0.5 * weight_decay * Sum(Squared Weights)
+        """
+        # 1. Data Cost (Reconstruction Error Energy)
+        # Using Input Layer error e_T (reconstruction error)
+        data_cost = 0.5 * torch.sum(self.input_driver.e_T ** 2).item()
+        
+        # 2. Model Cost (Weight Energy / Complexity)
+        # Using L2 norm of weights scaled by a small factor (lambda) often represented by weight decay
+        model_cost = 0.0
+        w_decay = self.cfg.adamw_weight_decay if self.cfg.adamw_weight_decay > 0 else 1e-5
+        for p in self.parameters():
+            model_cost += 0.5 * w_decay * torch.sum(p ** 2).item()
+            
+        return data_cost + model_cost
 
 
 # =========================
@@ -433,6 +517,8 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
+    spike_stats = SpikeStats()
+
     # Phase-1
     y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
@@ -446,7 +532,11 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
-    for _ in range(steps_phase1): net.one_time_step()
+    
+    for _ in range(steps_phase1): 
+        net.one_time_step()
+        spike_stats.flops += net._step_flops
+        spike_stats.data_movement_bytes += net._step_bytes
 
     # Phase-2 (continue state)
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
@@ -461,46 +551,40 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
 
     net.set_clamp(len(net.layers), True, y_onehot)
     
-    spike_stats = SpikeStats()
     for _ in range(steps_phase2):
         net.one_time_step()
+        spike_stats.flops += net._step_flops
+        spike_stats.data_movement_bytes += net._step_bytes
+
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
 
-    # --- CHANGED: Split Errors into Input, Hidden, Output (Mean per Data per Neuron) ---
+    # --- Error Stats ---
     batch_size = x.size(0)
     if batch_size > 0:
         # 1. Input Layer (Reconstruction)
         input_err_sum = net.input_driver.e_T.abs().sum().item()
         spike_stats.et_input = input_err_sum / batch_size / net.input_driver.dim
         
-        # 2. Output Layer (Classification) - The last layer in net.layers
+        # 2. Output Layer (Classification)
         output_layer = net.layers[-1]
         output_err_sum = output_layer.e_T.abs().sum().item()
         spike_stats.et_output = output_err_sum / batch_size / output_layer.dim
         
-        # 3. Hidden Layers - All layers except the last one
+        # 3. Hidden Layers
         hidden_err_sum = 0.0
         hidden_neurons = 0
-        
-        # net.layers has [Hidden1, Hidden2, ..., Output]
-        # We iterate up to len(net.layers) - 1
         for i in range(len(net.layers) - 1):
             lyr = net.layers[i]
             hidden_err_sum += lyr.e_T.abs().sum().item()
             hidden_neurons += lyr.dim
-            
         if hidden_neurons > 0:
             spike_stats.et_hidden = hidden_err_sum / batch_size / hidden_neurons
-        else:
-            spike_stats.et_hidden = 0.0
-            
-    else:
-        spike_stats.et_input = 0.0
-        spike_stats.et_hidden = 0.0
-        spike_stats.et_output = 0.0
-    # -------------------------------------------------------------
+    
+    # --- MDL Calculation ---
+    spike_stats.mdl = net.calculate_mdl(batch_size)
+    # -----------------------
     
     net.apply_phase2_update()
     return net.layers[-1].x_T.clone(), spike_stats
@@ -523,7 +607,7 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
         net.set_training(False)
         net.set_v1_dropout(False, x.size(0))   # no dropout in inference
     else:
-        net.set_training(False)                 # v2: no dropout in inference
+        net.set_training(False)                # v2: no dropout in inference
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
@@ -531,6 +615,9 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     spike_stats = SpikeStats()
     for _ in range(steps):
         net.one_time_step()
+        spike_stats.flops += net._step_flops
+        spike_stats.data_movement_bytes += net._step_bytes
+
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
@@ -546,7 +633,6 @@ def main(cfg: DiffPCConfig):
     # Setup
     torch.manual_seed(cfg.seed)
     
-    # Respect exact CUDA device string (e.g., "cuda:1")
     requested = str(cfg.device).lower()
     if requested.startswith("cuda"):
         if torch.cuda.is_available():
@@ -555,7 +641,7 @@ def main(cfg: DiffPCConfig):
                 if device.index is not None and device.index >= torch.cuda.device_count():
                     print(f"Warning: Requested {requested} but only {torch.cuda.device_count()} CUDA device(s) available. Using cuda:0.")
                     device = torch.device("cuda:0")
-                torch.cuda.set_device(device)  # ensure default current device
+                torch.cuda.set_device(device)
             except Exception as e:
                 print(f"Warning: Could not use '{requested}' ({e}). Falling back to cuda:0.")
                 device = torch.device("cuda:0")
@@ -571,6 +657,7 @@ def main(cfg: DiffPCConfig):
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
     plot_path = os.path.join(log_dir, f"{run_name}_error.png")
+    cost_plot_path = os.path.join(log_dir, f"{run_name}_cost.png") # New plot path for costs
 
     # Network and Schedulers
     l_t_spec = {
@@ -628,10 +715,9 @@ def main(cfg: DiffPCConfig):
         return F.one_hot(y, num_classes=cfg.layer_dims[-1]).float().to(device)
 
     run_results = []
-    # Store history for 3 separate parts
-    history_input = []
-    history_hidden = []
-    history_output = []
+    # Store history for plots
+    history_input, history_hidden, history_output = [], [], []
+    history_flops, history_bytes, history_mdl = [], [], []
     
     total_neurons = sum(cfg.layer_dims[1:])
 
@@ -642,16 +728,27 @@ def main(cfg: DiffPCConfig):
     for epoch in range(1, cfg.epochs + 1):
         # Training
         total_sa_train_p2, total_se_train_p2 = 0.0, 0.0
+        total_flops, total_bytes, total_mdl = 0.0, 0.0, 0.0
+        num_batches = 0
 
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
             total_sa_train_p2 += stats.sa_total
             total_se_train_p2 += stats.se_total
-            # --- Append separate errors ---
+            
+            # Aggregate Costs
+            total_flops += stats.flops
+            total_bytes += stats.data_movement_bytes
+            total_mdl += stats.mdl
+            num_batches += 1
+
+            # Append per-batch stats for granular plotting
             history_input.append(stats.et_input)
             history_hidden.append(stats.et_hidden)
             history_output.append(stats.et_output)
-            # ------------------------------
+            history_flops.append(stats.flops)
+            history_bytes.append(stats.data_movement_bytes / (1024**2)) # MB
+            history_mdl.append(stats.mdl)
 
         # Evaluation
         train_correct, train_total = 0, 0
@@ -682,11 +779,16 @@ def main(cfg: DiffPCConfig):
         avg_se_train_p2 = total_se_train_p2 / denom_train if denom_train > 0 else 0
         avg_sa_test_p1  = total_sa_test_p1  / denom_test  if denom_test  > 0 else 0
         avg_se_test_p1  = total_se_test_p1  / denom_test  if denom_test  > 0 else 0
+        
+        # Avg costs per batch
+        avg_flops_giga = (total_flops / num_batches) / 1e9
+        avg_bytes_mb   = (total_bytes / num_batches) / (1024**2)
+        avg_mdl        = total_mdl / num_batches
 
         print(
             f"Epoch {epoch:02d}: train acc {train_acc:.2f}% | test acc {test_acc:.2f}% | "
-            f"Avg Spikes/N (Train P2): s_a={avg_sa_train_p2:.2f}, s_e={avg_se_train_p2:.2f} | "
-            f"Avg Spikes/N (Test P1):  s_a={avg_sa_test_p1:.2f}, s_e={avg_se_test_p1:.2f}"
+            f"Avg Spikes/N: sa={avg_sa_train_p2:.2f}, se={avg_se_train_p2:.2f} | "
+            f"Avg Costs/Batch: {avg_flops_giga:.2f} GFLOPs, {avg_bytes_mb:.2f} MB, MDL={avg_mdl:.1f}"
         )
 
         run_results.append({
@@ -695,70 +797,46 @@ def main(cfg: DiffPCConfig):
             "test_acc": test_acc,
             "avg_spikes_per_neuron_train_p2_sa": avg_sa_train_p2,
             "avg_spikes_per_neuron_train_p2_se": avg_se_train_p2,
-            "avg_spikes_per_neuron_test_p1_sa": avg_sa_test_p1,
-            "avg_spikes_per_neuron_test_p1_se": avg_se_test_p1,
+            "avg_flops_per_batch": avg_flops_giga * 1e9,
+            "avg_bytes_per_batch": avg_bytes_mb * (1024**2),
+            "avg_mdl_per_batch": avg_mdl
         })
 
     # Save Results
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
 
-    # --- Plotting 3-Split Errors ---
+    # --- Plotting Errors ---
     print("Generating error plot...")
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-
-    # 1. Input Layer
-    axes[0].plot(history_input, color='orange', alpha=0.8)
-    axes[0].set_title('Input Layer (Reconstruction)')
-    axes[0].set_xlabel('Batch Iterations')
-    axes[0].set_ylabel('Mean |e_T| per Neuron')
-    axes[0].grid(True, alpha=0.3)
-
-    # 2. Hidden Layers
-    axes[1].plot(history_hidden, color='green', alpha=0.8)
-    axes[1].set_title('Hidden Layers (Internal)')
-    axes[1].set_xlabel('Batch Iterations')
-    axes[1].set_ylabel('Mean |e_T| per Neuron')
-    axes[1].grid(True, alpha=0.3)
-
-    # 3. Output Layer
-    axes[2].plot(history_output, color='blue', alpha=0.8)
-    axes[2].set_title('Output Layer (Classification)')
-    axes[2].set_xlabel('Batch Iterations')
-    axes[2].set_ylabel('Mean |e_T| per Neuron')
-    axes[2].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(plot_path)
-    plt.close()
-    print(f"Error plot saved to {plot_path}")
-    # ----------------------------------
-
+    axes[0].plot(history_input, color='orange', alpha=0.8); axes[0].set_title('Input Layer (Reconstruction)'); axes[0].set_ylabel('Mean |e_T|')
+    axes[1].plot(history_hidden, color='green', alpha=0.8); axes[1].set_title('Hidden Layers (Internal)'); axes[1].set_ylabel('Mean |e_T|')
+    axes[2].plot(history_output, color='blue', alpha=0.8); axes[2].set_title('Output Layer (Classification)'); axes[2].set_ylabel('Mean |e_T|')
+    for ax in axes: ax.grid(True, alpha=0.3); ax.set_xlabel('Batch Iterations')
+    plt.tight_layout(); plt.savefig(plot_path); plt.close()
+    
+    # --- Plotting Costs ---
+    print("Generating cost plot...")
+    fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
+    axes2[0].plot(history_flops, color='red', alpha=0.8); axes2[0].set_title('Computational Cost (FLOPs)'); axes2[0].set_ylabel('FLOPs per Batch')
+    axes2[1].plot(history_bytes, color='purple', alpha=0.8); axes2[1].set_title('Data Movement (Memory Access)'); axes2[1].set_ylabel('MB per Batch')
+    axes2[2].plot(history_mdl, color='black', alpha=0.8); axes2[2].set_title('Minimum Description Length (Energy)'); axes2[2].set_ylabel('MDL (Error+Weight)')
+    for ax in axes2: ax.grid(True, alpha=0.3); ax.set_xlabel('Batch Iterations')
+    plt.tight_layout(); plt.savefig(cost_plot_path); plt.close()
+    
+    print(f"Plots saved to {plot_path} and {cost_plot_path}")
     print(f"\nRun complete. Results saved to {log_path}")
-
-# =========================
-#  Sanity Check Function
-# =========================
 
 def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
     if seq_len is None:
         seq_len = 2 * cfg.lt_n
     print("\n--- Running l_t Scheduler Sanity Check ---")
-    print(f"Using scheduler: {cfg.lt_scheduler_type}")
-    print(f"Using config: lt_n={cfg.lt_n}, lt_m={cfg.lt_m}, lt_a={cfg.lt_a}")
     sched = get_l_t_scheduler(cfg.lt_scheduler_type, {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a})
     sched.begin_phase(0, seq_len * 5, a=cfg.lt_a)
-    
-    print("This shows the l_t value for the *previous* tick (t-1) and the *current* tick (t).")
-    print("The one-tick pipeline correctly uses get_l_t(t-1) to scale inputs arriving at t.")
-    
     for t in range(seq_len):
         lt_now = sched.get_l_t(t, True)
         lt_prev_correct = sched.get_l_t(t - 1, True) if t > 0 else 0.0
-        
-        print(f"t={t:02d} | "
-              f"l_t(t-1) [used for input]: {lt_prev_correct: >9.6f} | "
-              f"l_t(t) [used for update]: {lt_now: >9.6f}")
+        print(f"t={t:02d} | l_t(t-1): {lt_prev_correct: >9.6f} | l_t(t): {lt_now: >9.6f}")
     print("--- End of Sanity Check ---\n")
 
 
@@ -775,20 +853,20 @@ if __name__ == "__main__":
         phase2_cycles=15,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=20,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
         adamw_eps=1e-08,
         clip_grad_norm=1.0,
         seed=2,
-        run_name="mnist_400h",
+        run_name="mnist_costs_check",
         use_fashion_mnist=False,
         dropout_rate=0.5,
         v1_dropout=False,
         random_crop_padding=2,
         normalize=True,
         fmnist_hflip_p=0.0,
-        device="cuda:0" # Adjust device ID if necessary
+        device="cuda:0"
     )
     main(cfg)
