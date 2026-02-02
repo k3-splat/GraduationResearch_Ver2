@@ -148,7 +148,7 @@ class DiffPCLayerTorch(nn.Module):
         self.l_t, self.y, self.time_step = 0.0, 0.0, 1
         self.reset_state, self.reset_state_type = True, "zero"
         # prev-tick buffers
-        self.s_A_prev, self.s_e_disc_prev, self.s_e_gen = None, None, None
+        self.s_A_prev, self.s_e_disc_prev, self.s_e_gen_prev = None, None, None
 
     def _alloc(self, B: int):
         z = torch.zeros(B, self.dim, device=self.device)

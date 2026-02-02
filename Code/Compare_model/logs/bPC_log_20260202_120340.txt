@@ -1,0 +1,27 @@
+
+============================================================
+PHASE 2: Final Training with MDL (Epochs: 20)
+============================================================
+Epoch 01 | Acc: 85.92% | MDL: 35551.94 (Data: 35151.94, Model: 400.00)
+Epoch 02 | Acc: 90.44% | MDL: 21119.69 (Data: 20699.05, Model: 420.64)
+Epoch 03 | Acc: 92.08% | MDL: 16537.01 (Data: 16089.74, Model: 447.27)
+Epoch 04 | Acc: 92.90% | MDL: 14209.27 (Data: 13733.70, Model: 475.57)
+Epoch 05 | Acc: 93.42% | MDL: 12751.10 (Data: 12247.56, Model: 503.55)
+Epoch 06 | Acc: 93.84% | MDL: 11729.77 (Data: 11198.71, Model: 531.06)
+Epoch 07 | Acc: 94.22% | MDL: 10967.67 (Data: 10409.36, Model: 558.31)
+Epoch 08 | Acc: 94.32% | MDL: 10359.27 (Data: 9774.22, Model: 585.05)
+Epoch 09 | Acc: 94.64% | MDL: 9875.09 (Data: 9263.46, Model: 611.62)
+Epoch 10 | Acc: 94.66% | MDL: 9479.79 (Data: 8842.01, Model: 637.78)
+Epoch 11 | Acc: 95.00% | MDL: 9148.80 (Data: 8485.16, Model: 663.64)
+Epoch 12 | Acc: 94.78% | MDL: 8867.50 (Data: 8178.23, Model: 689.27)
+Epoch 13 | Acc: 95.20% | MDL: 8615.54 (Data: 7900.98, Model: 714.56)
+Epoch 14 | Acc: 95.34% | MDL: 8383.82 (Data: 7644.58, Model: 739.24)
+Epoch 15 | Acc: 95.38% | MDL: 8197.60 (Data: 7433.84, Model: 763.76)
+Epoch 16 | Acc: 95.48% | MDL: 8021.51 (Data: 7233.65, Model: 787.86)
+Epoch 17 | Acc: 95.32% | MDL: 7869.22 (Data: 7057.65, Model: 811.57)
+Epoch 18 | Acc: 95.26% | MDL: 7745.43 (Data: 6910.52, Model: 834.92)
+Epoch 19 | Acc: 95.56% | MDL: 7617.31 (Data: 6759.42, Model: 857.89)
+Epoch 20 | Acc: 95.64% | MDL: 7493.31 (Data: 6612.92, Model: 880.38)
+Computing Final RMSE and generating images...
+Final Generative RMSE: 0.2747
+Results saved: logs/error_trends_20260202_120340.png, logs/generated_digits_20260202_120340.png

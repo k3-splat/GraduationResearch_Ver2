@@ -1,0 +1,129 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 15,
+        "phase2_cycles": 15,
+        "alpha_disc": 1,
+        "alpha_gen": 0.01,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_400h_with_errors",
+        "use_fashion_mnist": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 89.73333333333333,
+            "test_acc": 90.24,
+            "avg_err_disc_train": 0.03418933045571446,
+            "avg_err_gen_train": 0.000901228616213928,
+            "avg_err_disc_test": 0.0029143124536907027,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 2,
+            "train_acc": 91.74,
+            "test_acc": 91.66,
+            "avg_err_disc_train": 0.02790810533883787,
+            "avg_err_gen_train": 0.0007257191914246014,
+            "avg_err_disc_test": 0.0027221982535781232,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 3,
+            "train_acc": 92.91666666666667,
+            "test_acc": 92.5,
+            "avg_err_disc_train": 0.025494372191375736,
+            "avg_err_gen_train": 0.0006673478858961545,
+            "avg_err_disc_test": 0.0026402578448726974,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 4,
+            "train_acc": 93.81333333333333,
+            "test_acc": 93.23,
+            "avg_err_disc_train": 0.023928110693976472,
+            "avg_err_gen_train": 0.0006325579746147445,
+            "avg_err_disc_test": 0.002603379850874262,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 5,
+            "train_acc": 94.41166666666666,
+            "test_acc": 93.7,
+            "avg_err_disc_train": 0.022785013872027027,
+            "avg_err_gen_train": 0.0006081160710833914,
+            "avg_err_disc_test": 0.0025717758010020287,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 6,
+            "train_acc": 95.02333333333333,
+            "test_acc": 94.13,
+            "avg_err_disc_train": 0.02196949758655177,
+            "avg_err_gen_train": 0.0005898851744751347,
+            "avg_err_disc_test": 0.0025747033728945705,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 7,
+            "train_acc": 95.57333333333334,
+            "test_acc": 94.59,
+            "avg_err_disc_train": 0.021277298877399632,
+            "avg_err_gen_train": 0.0005750786876537117,
+            "avg_err_disc_test": 0.0025851014346756833,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 8,
+            "train_acc": 95.90666666666667,
+            "test_acc": 94.59,
+            "avg_err_disc_train": 0.020699886650508575,
+            "avg_err_gen_train": 0.000562601939689183,
+            "avg_err_disc_test": 0.0025728450790611533,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 9,
+            "train_acc": 96.215,
+            "test_acc": 94.92,
+            "avg_err_disc_train": 0.02024465181179434,
+            "avg_err_gen_train": 0.0005519529417015163,
+            "avg_err_disc_test": 0.0025838538344702708,
+            "avg_err_gen_test": 0.0
+        },
+        {
+            "epoch": 10,
+            "train_acc": 96.38166666666666,
+            "test_acc": 94.96,
+            "avg_err_disc_train": 0.01978955364156192,
+            "avg_err_gen_train": 0.0005429022022017694,
+            "avg_err_disc_test": 0.0026123937052279873,
+            "avg_err_gen_test": 0.0
+        }
+    ]
+}

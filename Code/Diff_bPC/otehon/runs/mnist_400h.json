@@ -1,0 +1,129 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 15,
+        "phase2_cycles": 15,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_400h",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 2,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 85.56666666666666,
+            "test_acc": 90.98,
+            "avg_spikes_per_neuron_train_p2_sa": 0.03912963414634146,
+            "avg_spikes_per_neuron_train_p2_se": 0.02252109756097561,
+            "avg_spikes_per_neuron_test_p1_sa": 1.6434958536585367,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 2,
+            "train_acc": 90.18666666666667,
+            "test_acc": 93.98,
+            "avg_spikes_per_neuron_train_p2_sa": 0.030346544715447156,
+            "avg_spikes_per_neuron_train_p2_se": 0.018900162601626018,
+            "avg_spikes_per_neuron_test_p1_sa": 1.7265570731707318,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 3,
+            "train_acc": 92.49166666666666,
+            "test_acc": 95.36,
+            "avg_spikes_per_neuron_train_p2_sa": 0.027486341463414634,
+            "avg_spikes_per_neuron_train_p2_se": 0.01757211382113821,
+            "avg_spikes_per_neuron_test_p1_sa": 1.8047141463414633,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 4,
+            "train_acc": 93.55666666666667,
+            "test_acc": 96.07,
+            "avg_spikes_per_neuron_train_p2_sa": 0.026153373983739837,
+            "avg_spikes_per_neuron_train_p2_se": 0.01660991869918699,
+            "avg_spikes_per_neuron_test_p1_sa": 1.8842673170731707,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 5,
+            "train_acc": 94.30833333333334,
+            "test_acc": 96.46,
+            "avg_spikes_per_neuron_train_p2_sa": 0.025094308943089432,
+            "avg_spikes_per_neuron_train_p2_se": 0.015968658536585367,
+            "avg_spikes_per_neuron_test_p1_sa": 1.934469268292683,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 6,
+            "train_acc": 94.84666666666666,
+            "test_acc": 96.62,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02456252032520325,
+            "avg_spikes_per_neuron_train_p2_se": 0.01552670731707317,
+            "avg_spikes_per_neuron_test_p1_sa": 2.005038536585366,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 7,
+            "train_acc": 95.11666666666666,
+            "test_acc": 96.88,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02396861788617886,
+            "avg_spikes_per_neuron_train_p2_se": 0.015078780487804878,
+            "avg_spikes_per_neuron_test_p1_sa": 2.0436631707317074,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 8,
+            "train_acc": 95.42,
+            "test_acc": 97.13,
+            "avg_spikes_per_neuron_train_p2_sa": 0.023565162601626017,
+            "avg_spikes_per_neuron_train_p2_se": 0.014682073170731707,
+            "avg_spikes_per_neuron_test_p1_sa": 2.085870243902439,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 9,
+            "train_acc": 95.69833333333334,
+            "test_acc": 97.18,
+            "avg_spikes_per_neuron_train_p2_sa": 0.02329630081300813,
+            "avg_spikes_per_neuron_train_p2_se": 0.0143919918699187,
+            "avg_spikes_per_neuron_test_p1_sa": 2.130213658536585,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        },
+        {
+            "epoch": 10,
+            "train_acc": 96.01,
+            "test_acc": 97.27,
+            "avg_spikes_per_neuron_train_p2_sa": 0.023043983739837397,
+            "avg_spikes_per_neuron_train_p2_se": 0.014111829268292683,
+            "avg_spikes_per_neuron_test_p1_sa": 2.158767073170732,
+            "avg_spikes_per_neuron_test_p1_se": 0.0
+        }
+    ]
+}

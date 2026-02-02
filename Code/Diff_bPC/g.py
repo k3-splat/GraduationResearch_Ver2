@@ -10,7 +10,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.utils import save_image
 
+import matplotlib.pyplot as plt
 
 # =========================
 #  Config & Stats
@@ -19,14 +21,15 @@ from torchvision import datasets, transforms
 @dataclass
 class DiffPCConfig:
     """Central configuration for the DiffPC model and training."""
-    layer_dims: list[int] = (784, 200, 10)
-    lt_m: int = 3; lt_n: int = 4; lt_a: float = 0.5
+    layer_dims: list[int] = (784, 400, 10)
+    lt_m: int = 1; lt_n: int = 5; lt_a: float = 1.0
+    lt_min: float = 0.0
     lt_scheduler_type: str = "cyclic_phase"   # "cyclic_phase" or "constant"
-    gamma_value: float = 0.2; gamma_every_n: Optional[int] = None
-    t_init_cycles: int = 15; phase2_cycles: int = 15
-    alpha_disc: float = 1.0; alpha_gen: float = 1e-4
-    pc_lr: float = 5e-4
-    batch_size: int = 256; epochs: int = 125
+    gamma_value: float = 0.05; gamma_every_n: Optional[int] = None
+    t_init_cycles: int = 20; phase2_cycles: int = 20
+    alpha_disc: float = 1.0; alpha_gen: float = 1e-3
+    pc_lr: float = 1e-4
+    batch_size: int = 256; epochs: int = 10
     use_adamw: bool = True
     adamw_weight_decay: float = 0.0
     adamw_betas: tuple[float, float] = (0.9, 0.999)
@@ -36,8 +39,8 @@ class DiffPCConfig:
     run_name: Optional[str] = None # If None, will be timestamped
     use_fashion_mnist: bool = False
     random_crop_padding: int = 0
-    normalize: bool = True                  # toggle Normalize(mean,std)
-    fmnist_hflip_p: float = 0.0             # NEW: optional horizontal flip prob for FMNIST train
+    normalize: bool = True
+    fmnist_hflip_p: float = 0.0
     device: str = "cuda"
 
 
@@ -61,7 +64,7 @@ class LTBaseScheduler:
 
 @dataclass
 class LTCyclicPhase(LTBaseScheduler):
-    m: int; n: int; a: float = 1.0
+    m: int; n: int; a: float = 1.0; lt_min: float = 0.0
     _phase_start_cycle: int = 0; _phase_cycles: int = 1; _phase_a: float = 1.0
 
     def begin_phase(self, phase_start_step: int, phase_len: int, a: Optional[float] = None):
@@ -78,13 +81,14 @@ class LTCyclicPhase(LTBaseScheduler):
         return 1.0 - (1.0 - self._phase_a) * r
 
     def get_l_t(self, sample_step: int, train: bool) -> float:
-        k = _mod_idx(sample_step, self.n)
-        base = (2.0 ** self.m) / (2.0 ** k)
-        return base * self._decay_mult(sample_step)
+        base = 2.0 ** self.m
+        val = base * self._decay_mult(sample_step)
+        return max(val, self.lt_min)
 
 @dataclass
 class LTConstant(LTBaseScheduler):
     m: int; n: int; a: float = 1.0
+    lt_min: float = 0.0 
     _phase_start_cycle: int = 0; _phase_cycles: int = 1; _phase_a: float = 1.0
 
     def begin_phase(self, phase_start_step: int, phase_len: int, a: Optional[float] = None):
@@ -102,7 +106,8 @@ class LTConstant(LTBaseScheduler):
 
     def get_l_t(self, sample_step: int, train: bool) -> float:
         base = 2.0 ** self.m
-        return base * self._decay_mult(sample_step)
+        val = base * self._decay_mult(sample_step)
+        return max(val, self.lt_min)
 
 def get_l_t_scheduler(scheduler_type: str, scheduler_args: dict) -> LTBaseScheduler:
     if scheduler_type == "cyclic_phase": return LTCyclicPhase(**scheduler_args)
@@ -134,8 +139,6 @@ def get_y_scheduler(scheduler_type: str, scheduler_args: dict) -> YBaseScheduler
 #  Single layer state machine (batched)
 # =========================
 
-def _sign_ternary(x: torch.Tensor) -> torch.Tensor: return torch.sign(x)
-
 class DiffPCLayerTorch(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
@@ -147,7 +150,7 @@ class DiffPCLayerTorch(nn.Module):
         self.l_t, self.y, self.time_step = 0.0, 0.0, 1
         self.reset_state, self.reset_state_type = True, "zero"
         # prev-tick buffers
-        self.s_A_prev, self.s_e_disc_prev, self.s_e_gen = None, None, None
+        self.s_A_prev, self.s_e_disc_prev, self.s_e_gen_prev = None, None, None
 
     def _alloc(self, B: int):
         z = torch.zeros(B, self.dim, device=self.device)
@@ -163,7 +166,7 @@ class DiffPCLayerTorch(nn.Module):
 
     def reset_states_if_needed(self, clamp_status: bool, sample_step: int):
         if (sample_step == 0) and self.reset_state:
-            self.x_F_disc.zero_(); self.x_F_disc.zero_(); self.x_A.zero_()
+            self.x_F_disc.zero_(); self.x_F_gen.zero_(); self.x_A.zero_()
             self.e_T_disc.zero_(); self.e_T_gen.zero_()
             self.e_A_disc.zero_(); self.e_A_gen.zero_(); self.e_in_disc.zero_(), self.e_in_gen.zero_()
             if not clamp_status: self.x_T.zero_()
@@ -195,8 +198,8 @@ class DiffPCLayerTorch(nn.Module):
 
         self.x_F_disc.add_(self.s_in_disc * l_t_prev)
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
-        self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
-        self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
+        self.e_T_disc = (self.x_T - self.x_F_disc)
+        self.e_T_gen = (self.x_T - self.x_F_gen)
         if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
             self.x_F_disc.zero_()
             self.e_T_disc.zero_()
@@ -208,7 +211,7 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.alpha_disc * self.e_T_disc - self.alpha_gen * self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
@@ -291,7 +294,8 @@ class DiffPCNetworkTorch(nn.Module):
         y_sched = get_y_scheduler(y_scheduler_spec["type"], {**y_scheduler_spec["args"], "l_t_scheduler": l_t_sched})
         layer_args = {"sampling_duration": 1, "learning_weights": True, "training": True,
                       "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, 
-                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen, "device": self.device}
+                      "alpha_disc": cfg.alpha_disc, "alpha_gen": cfg.alpha_gen,
+                      "device": self.device}
         self.layers = nn.ModuleList([DiffPCLayerTorch(dim=d, **layer_args) for d in cfg.layer_dims[1:]])
         self.input_driver = DiffPCLayerTorch(dim=cfg.layer_dims[0], **layer_args)
 
@@ -309,7 +313,6 @@ class DiffPCNetworkTorch(nn.Module):
         for lyr in [self.input_driver, *self.layers]:
             lyr._alloc(batch_size); lyr.time_step = 1
         self._global_step = 0
-        # runner controls _bias_fired_once
     
     def set_training(self, flag: bool):
         self.train(flag)
@@ -424,7 +427,11 @@ class DiffPCNetworkTorch(nn.Module):
 
 @torch.no_grad()
 def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torch.Tensor,
-                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+                        cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> tuple[torch.Tensor, SpikeStats, Dict[str, List[float]]]:
+    """
+    Returns:
+        x_T, SpikeStats, and a dictionary of Error Stats (Sum of absolute error per data).
+    """
     lt_n = l_t_spec["args"]["n"]
     steps_phase1 = cfg.t_init_cycles * lt_n
     steps_phase2 = cfg.phase2_cycles * lt_n
@@ -441,7 +448,7 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
 
-    net.set_training(False)                       # v2: no dropout in P1
+    net.set_training(False)
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
@@ -452,20 +459,49 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase2)
 
-    net.set_training(True)                      # v2: nn.Dropout active now
+    net.set_training(True)
 
     net.set_clamp(len(net.layers), True, y_onehot)
     
     spike_stats = SpikeStats()
+    
+    # ----------------------------------------------------
+    # Error Stats Storage
+    # We will accumulate the sum of absolute errors for the batch,
+    # then at the end divide by batch_size to get "error per data".
+    # ----------------------------------------------------
+    batch_size = x.size(0)
+    batch_error_accum = {
+        "input_gen": 0.0,
+        "layers_disc": [0.0] * len(net.layers),
+        "layers_gen": [0.0] * len(net.layers)
+    }
+
     for _ in range(steps_phase2):
         net.one_time_step(bottomup_mask=False, topdown_mask=False)
+        
+        # Count Spikes
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+        # Measure Errors (Sum of Absolute Error)
+        batch_error_accum["input_gen"] += net.input_driver.e_T_gen.abs().sum().item()
+
+        for i, lyr in enumerate(net.layers):
+            batch_error_accum["layers_disc"][i] += lyr.e_T_disc.abs().sum().item()
+            batch_error_accum["layers_gen"][i] += lyr.e_T_gen.abs().sum().item()
     
+    # Normalize by batch size to get "Sum per Data" (averaged over batch)
+    batch_error_stats = {
+        "input_gen": batch_error_accum["input_gen"] / batch_size,
+        "layers_disc": [val / batch_size for val in batch_error_accum["layers_disc"]],
+        "layers_gen": [val / batch_size for val in batch_error_accum["layers_gen"]]
+    }
+
     net.apply_phase2_update()
-    return net.layers[-1].x_T.clone(), spike_stats
+    return net.layers[-1].x_T.clone(), spike_stats, batch_error_stats
 
 @torch.no_grad()
 def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
@@ -481,7 +517,7 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_forward)
 
-    net.set_training(False)                 # v2: no dropout in inference
+    net.set_training(False)
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
@@ -497,15 +533,114 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     return net.layers[-1].x_T.clone(), spike_stats
 
 
+@torch.no_grad()
+def infer_batch_backward_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
+    lt_n = l_t_spec["args"]["n"]
+    steps = cfg.t_init_cycles * lt_n
+    net.set_sampling_duration(steps)
+    net.reset_all_states(y_onehot.size(0))
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps
+    
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+    y_forward = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_forward)
+
+    net.set_training(False)
+
+    net.set_clamp(len(net.layers), True, y_onehot)
+    for li in range(0, len(net.layers)): net.set_clamp(li, False)
+    
+    spike_stats = SpikeStats()
+    for _ in range(steps):
+        net.one_time_step(bottomup_mask=True, topdown_mask=False)
+        for lyr in net.layers:
+            spike_stats.sa_total += (lyr.s_A != 0).sum().item()
+            spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
+            spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+            
+    return net.input_driver.x_T.clone(), spike_stats
+
+
+def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
+                               l_t_spec: dict, 
+                               epoch: int, output_dir: str = "gen_results"):
+    os.makedirs(output_dir, exist_ok=True)
+    device = net.device
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    labels = torch.arange(10, device=device)
+    y_onehot = F.one_hot(labels, num_classes=cfg.layer_dims[-1]).float()
+    
+    generated_data, _ = infer_batch_backward_only(net, y_onehot, cfg, l_t_spec)
+    gen_imgs = generated_data.view(10, 1, 28, 28)
+    
+    if cfg.normalize:
+        if cfg.use_fashion_mnist:
+            mean, std = 0.2860, 0.3530
+        else:
+            mean, std = 0.1307, 0.3081
+        gen_imgs = gen_imgs * std + mean
+    
+    gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_{timestamp}.png")
+    save_image(gen_imgs, save_path, nrow=10)
+
+
+def plot_batch_error_history(error_history: List[Dict], output_dir: str = "plots"):
+    """
+    Plots the error curves per batch (step) over the entire training run.
+    Expects error_history to be a list of dicts with:
+      {'input_gen': float, 'layers_disc': [float...], 'layers_gen': [float...]}
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    # x-axis: Global Batch Step
+    steps = range(1, len(error_history) + 1)
+    
+    # Organize data for plotting
+    input_gen_hist = [h['input_gen'] for h in error_history]
+    
+    num_layers = len(error_history[0]['layers_disc'])
+    layers_disc_hist = [[h['layers_disc'][i] for h in error_history] for i in range(num_layers)]
+    layers_gen_hist = [[h['layers_gen'][i] for h in error_history] for i in range(num_layers)]
+
+    plt.figure(figsize=(14, 6))
+
+    # Subplot 1: Discriminative Errors (Bottom-up)
+    plt.subplot(1, 2, 1)
+    for i in range(num_layers):
+        plt.plot(steps, layers_disc_hist[i], linewidth=0.5, label=f'Layer {i+1} Disc Err')
+    plt.title('Discriminative Error Sum (per data, per batch)')
+    plt.xlabel('Global Batch Step')
+    plt.ylabel('Sum |e_T_disc|')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Subplot 2: Generative Errors (Top-down)
+    plt.subplot(1, 2, 2)
+    plt.plot(steps, input_gen_hist, linewidth=0.5, linestyle='--', label='Input (L0) Gen Err')
+    for i in range(num_layers):
+        plt.plot(steps, layers_gen_hist[i], linewidth=0.5, label=f'Layer {i+1} Gen Err')
+    plt.title('Generative Error Sum (per data, per batch)')
+    plt.xlabel('Global Batch Step')
+    plt.ylabel('Sum |e_T_gen|')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path = os.path.join(output_dir, f"batch_error_curves_{timestamp}.png")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"Full batch error plot saved to: {save_path}")
+
+
 # =========================
 #  MNIST training wrapper
 # =========================
 
 def main(cfg: DiffPCConfig):
-    # Setup
     torch.manual_seed(cfg.seed)
-    
-    # Respect exact CUDA device string (e.g., "cuda:1")
     requested = str(cfg.device).lower()
     if requested.startswith("cuda"):
         if torch.cuda.is_available():
@@ -514,7 +649,7 @@ def main(cfg: DiffPCConfig):
                 if device.index is not None and device.index >= torch.cuda.device_count():
                     print(f"Warning: Requested {requested} but only {torch.cuda.device_count()} CUDA device(s) available. Using cuda:0.")
                     device = torch.device("cuda:0")
-                torch.cuda.set_device(device)  # ensure default current device
+                torch.cuda.set_device(device)
             except Exception as e:
                 print(f"Warning: Could not use '{requested}' ({e}). Falling back to cuda:0.")
                 device = torch.device("cuda:0")
@@ -530,10 +665,9 @@ def main(cfg: DiffPCConfig):
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
 
-    # Network and Schedulers
     l_t_spec = {
         "type": cfg.lt_scheduler_type,
-        "args": {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a}
+        "args": {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a, "lt_min": cfg.lt_min}
     }
     y_phase2_spec = {
         "type": "on_cycle_start",
@@ -546,7 +680,6 @@ def main(cfg: DiffPCConfig):
         device=str(device)
     )
     
-    # Data transforms (with optional Normalize and FMNIST horizontal flip)
     if cfg.use_fashion_mnist:
         mean, std = 0.2860, 0.3530
     else:
@@ -558,7 +691,6 @@ def main(cfg: DiffPCConfig):
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding, padding_mode="edge"))
         else:
             train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding))
-    # Optional FMNIST horizontal flip
     if cfg.use_fashion_mnist and cfg.fmnist_hflip_p > 0.0:
         train_transforms_list.append(transforms.RandomHorizontalFlip(p=cfg.fmnist_hflip_p))
     train_transforms_list.append(transforms.ToTensor())
@@ -587,24 +719,53 @@ def main(cfg: DiffPCConfig):
         return F.one_hot(y, num_classes=cfg.layer_dims[-1]).float().to(device)
 
     run_results = []
+    
+    # NEW: Store error history for EVERY batch across ALL epochs
+    global_batch_error_history = [] 
+
     total_neurons = sum(cfg.layer_dims[1:])
 
     print(f"Starting run: {run_name}")
     print(f"Using device: {device}")
-    print(f"Logging to: {log_path}")
 
     for epoch in range(1, cfg.epochs + 1):
-        # Training
         total_sa_train_p2, total_se_disc_train_p2, total_se_gen_train_p2 = 0.0, 0.0, 0.0
+        
+        # This is just for printing epoch summary (not for plotting)
+        epoch_err_accum = {
+            "input_gen": 0.0,
+            "layers_disc": [0.0] * len(net.layers),
+            "layers_gen": [0.0] * len(net.layers)
+        }
+        total_samples = 0
 
-        # IMPORTANT: set training/inference modes are handled inside runner based on cfg.v1_dropout
         for images, labels in train_loader:
-            _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
+            _, stats, batch_err_stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
+            
+            # --- Store Batch Stats for Final Plot ---
+            global_batch_error_history.append(batch_err_stats)
+            # ----------------------------------------
+
             total_sa_train_p2 += stats.sa_total
             total_se_disc_train_p2 += stats.se_disc_total
             total_se_gen_train_p2 += stats.se_gen_total
 
-        # Evaluation
+            bs = images.size(0)
+            total_samples += bs
+            
+            # For epoch summary printing
+            epoch_err_accum["input_gen"] += batch_err_stats["input_gen"] * bs
+            for i in range(len(net.layers)):
+                epoch_err_accum["layers_disc"][i] += batch_err_stats["layers_disc"][i] * bs
+                epoch_err_accum["layers_gen"][i] += batch_err_stats["layers_gen"][i] * bs
+
+        # Average over total samples in epoch for printing
+        epoch_avg_error = {
+            "input_gen": epoch_err_accum["input_gen"] / total_samples,
+            "layers_disc": [v / total_samples for v in epoch_err_accum["layers_disc"]],
+            "layers_gen": [v / total_samples for v in epoch_err_accum["layers_gen"]]
+        }
+
         train_correct, train_total = 0, 0
         test_correct, test_total = 0, 0
         total_sa_test_p1, total_se_disc_test_p1, total_se_gen_test_p1 = 0.0, 0.0, 0.0
@@ -633,87 +794,45 @@ def main(cfg: DiffPCConfig):
         avg_sa_train_p2 = total_sa_train_p2 / denom_train if denom_train > 0 else 0
         avg_se_disc_train_p2 = total_se_disc_train_p2 / denom_train if denom_train > 0 else 0
         avg_se_gen_train_p2 = total_se_gen_train_p2 / denom_train if denom_train > 0 else 0
-        avg_sa_test_p1  = total_sa_test_p1  / denom_test  if denom_test  > 0 else 0
-        avg_se_disc_test_p1  = total_se_disc_test_p1  / denom_test  if denom_test  > 0 else 0
-        avg_se_gen_test_p1  = total_se_gen_test_p1  / denom_test  if denom_test  > 0 else 0
 
         print(
             f"Epoch {epoch:02d}: train acc {train_acc:.2f}% | test acc {test_acc:.2f}% | "
-            f"Avg Spikes/N (Train P2): s_a={avg_sa_train_p2:.2f}, s_e_disc={avg_se_disc_train_p2:.2f} , s_e_gen={avg_se_gen_train_p2:.2f}| "
-            f"Avg Spikes/N (Test P1):  s_a={avg_sa_test_p1:.2f}, s_e_disc={avg_se_disc_test_p1:.2f}, s_e_gen={avg_se_gen_test_p1:.2f}"
+            f"Avg Spikes (Train P2): s_a={avg_sa_train_p2:.2f}, s_e_disc={avg_se_disc_train_p2:.2f}"
         )
+        print(f"  > Avg Err per Data: InputGen={epoch_avg_error['input_gen']:.2f}, "
+              f"L1_Disc={epoch_avg_error['layers_disc'][0]:.2f}, L1_Gen={epoch_avg_error['layers_gen'][0]:.2f}")
+
+        visualize_generated_digits(net, cfg, l_t_spec, epoch)
 
         run_results.append({
-            "epoch": epoch,
-            "train_acc": train_acc,
-            "test_acc": test_acc,
-            "avg_spikes_per_neuron_train_p2_sa": avg_sa_train_p2,
-            "avg_spikes_per_neuron_train_p2_se_disc": avg_se_disc_train_p2,
-            "avg_spikes_per_neuron_train_p2_se_gen": avg_se_gen_train_p2,
-            "avg_spikes_per_neuron_test_p1_sa": avg_sa_test_p1,
-            "avg_spikes_per_neuron_test_p1_se_disc": avg_se_disc_test_p1,
-            "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
+            "epoch": epoch, "train_acc": train_acc, "test_acc": test_acc
         })
 
-    # Save
+    # === PLOT ONLY ONCE AT THE END ===
+    print("Training finished. Plotting full batch error history...")
+    plot_batch_error_history(global_batch_error_history)
+
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
-
-    print(f"\nRun complete. Results saved to {log_path}")
-
-# =========================
-#  Sanity Check Function
-# =========================
-
-def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
-    if seq_len is None:
-        seq_len = 2 * cfg.lt_n
-    print("\n--- Running l_t Scheduler Sanity Check ---")
-    print(f"Using scheduler: {cfg.lt_scheduler_type}")
-    print(f"Using config: lt_n={cfg.lt_n}, lt_m={cfg.lt_m}, lt_a={cfg.lt_a}")
-    sched = get_l_t_scheduler(cfg.lt_scheduler_type, {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a})
-    sched.begin_phase(0, seq_len * 5, a=cfg.lt_a)
-    
-    print("This shows the l_t value for the *previous* tick (t-1) and the *current* tick (t).")
-    print("The one-tick pipeline correctly uses get_l_t(t-1) to scale inputs arriving at t.")
-    
-    for t in range(seq_len):
-        lt_now = sched.get_l_t(t, True)
-        lt_prev_correct = sched.get_l_t(t - 1, True) if t > 0 else 0.0
-        
-        print(f"t={t:02d} | "
-              f"l_t(t-1) [used for input]: {lt_prev_correct: >9.6f} | "
-              f"l_t(t) [used for update]: {lt_now: >9.6f}")
-    print("--- End of Sanity Check ---\n")
-
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
-        lt_m=0,
-        lt_n=5,
-        lt_a=1.0,
+        lt_m=1,
+        lt_n=6,
+        lt_a=1.0, 
+        lt_min=0., 
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
-        gamma_every_n=None,
-        t_init_cycles=15,
-        phase2_cycles=15,
+        t_init_cycles=20,
+        phase2_cycles=20,
         alpha_disc = 1,
-        alpha_gen = 0.01,
+        alpha_gen = 0.001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
-        use_adamw=True,
-        adamw_weight_decay=0.01,
-        adamw_betas=(0.9, 0.999),
-        adamw_eps=1e-08,
-        clip_grad_norm=1.0,
-        seed=2,
-        run_name="mnist_400h",
-        use_fashion_mnist=False,
-        random_crop_padding=2,
-        normalize=True,
-        fmnist_hflip_p=0.0,
-        device="cuda:0" # Adjust device ID if necessary
+        run_name="mnist_batch_plot_test",
+        device="cuda:0"
     )
+    
     main(cfg)
