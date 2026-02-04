@@ -1,0 +1,94 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": -1,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_min_a": 0.0,
+        "lt_min_e_disc": 0.0,
+        "lt_min_e_gen": 0.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 20,
+        "phase2_cycles": 30,
+        "alpha_disc": 1,
+        "alpha_gen": 0.01,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_m-130c",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 2,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 78.26833333333333,
+            "test_acc": 86.94
+        },
+        {
+            "epoch": 2,
+            "train_acc": 83.72666666666667,
+            "test_acc": 90.29
+        },
+        {
+            "epoch": 3,
+            "train_acc": 86.38666666666667,
+            "test_acc": 92.26
+        },
+        {
+            "epoch": 4,
+            "train_acc": 88.02,
+            "test_acc": 93.14
+        },
+        {
+            "epoch": 5,
+            "train_acc": 89.28833333333333,
+            "test_acc": 93.62
+        },
+        {
+            "epoch": 6,
+            "train_acc": 89.44833333333334,
+            "test_acc": 93.66
+        },
+        {
+            "epoch": 7,
+            "train_acc": 90.46333333333334,
+            "test_acc": 94.46
+        },
+        {
+            "epoch": 8,
+            "train_acc": 90.575,
+            "test_acc": 94.14
+        },
+        {
+            "epoch": 9,
+            "train_acc": 91.20833333333333,
+            "test_acc": 94.36
+        },
+        {
+            "epoch": 10,
+            "train_acc": 91.36333333333333,
+            "test_acc": 94.7
+        }
+    ]
+}

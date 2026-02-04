@@ -702,14 +702,32 @@ def main(cfg: DiffPCConfig):
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        layer_dims=[10, 400, 784], 
-        lt_m=0, lt_n=5, lt_a=1.0,
+        layer_dims=[10, 400, 784],
+        lt_m=0,
+        lt_n=5,
+        lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
-        gamma_value=0.1,
-        alpha = 0.01,
-        t_init_cycles=15, phase2_cycles=15,
-        pc_lr=0.0005, batch_size=256, epochs=10,
-        use_adamw=True, adamw_weight_decay=0.01,
-        seed=42, run_name="genpc_mnist", device="cuda:0"
+        gamma_value=0.05,
+        gamma_every_n=None,
+        t_init_cycles=15,
+        phase2_cycles=15,
+        alpha=1.0,
+        pc_lr=0.0001,
+        batch_size=256,
+        epochs=10,
+        use_adamw=True,
+        adamw_weight_decay=0.01,
+        adamw_betas=(0.9, 0.999),
+        adamw_eps=1e-08,
+        clip_grad_norm=1.0,
+        seed=2,
+        run_name="mnist_400h",
+        use_fashion_mnist=False,
+        dropout_rate=0.5,
+        v1_dropout=False,
+        random_crop_padding=2,
+        normalize=True,
+        fmnist_hflip_p=0.0,
+        device="cuda:0" # Adjust device ID if necessary
     )
     main(cfg)

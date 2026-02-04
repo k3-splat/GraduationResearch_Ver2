@@ -45,7 +45,7 @@ class DiffPCConfig:
 
 @dataclass
 class SpikeStats:
-    """Container for spike counts, error stats, and computational costs."""
+    """Container for spike counts, error stats, and comprehensive computational costs."""
     sa_total: float = 0.0
     se_total: float = 0.0
     # Error stats (Mean per Data per Neuron)
@@ -53,10 +53,18 @@ class SpikeStats:
     et_hidden: float = 0.0  # Hidden Layers
     et_output: float = 0.0  # Output Layer
     
-    # --- ADDED: Computational Cost Metrics ---
-    flops: float = 0.0           # Total FLOPs for the batch processing
-    data_movement_bytes: float = 0.0  # Total Memory Access (Read+Write) in Bytes
-    mdl: float = 0.0             # Minimum Description Length (Energy) at convergence
+    # --- Computational Cost Metrics (Accumulated per Batch) ---
+    # 1. FLOPs (Giga Operations) - Arithmetic intensity
+    flops_dense: float = 0.0
+    flops_sparse: float = 0.0
+    
+    # 2. Data Movement (Bytes) - Memory Access / IO
+    dm_dense: float = 0.0
+    dm_sparse: float = 0.0
+    
+    # 3. Transfer Bits (Bits) - Inter-layer Communication Bandwidth
+    bits_dense: float = 0.0
+    bits_sparse: float = 0.0
     # -----------------------------------------
 
 # =========================
@@ -225,29 +233,42 @@ class DiffPCLayerTorch(nn.Module):
         else:
             self.time_step += 1
 
-    def get_elementwise_costs(self, batch_size: int, clamp_status: bool):
-        """Returns (FLOPs, Bytes_Moved) for element-wise ops in one step."""
+    def get_elementwise_costs(self, batch_size: int, clamp_status: bool, s_in_active_count: int = None, e_in_active_count: int = None):
+        """
+        Returns dictionary with Dense and Sparse costs for element-wise operations inside the layer.
+        """
         dim = self.dim
-        # FLOPs estimation (Approximate per neuron):
-        # x_F update: add + mul = 2
-        # e_T update: sub = 1
-        # e_in_data update: add + mul = 2
-        # x_T update (if not clamped): mul + mul + sub + cond_mul = ~4-5. Say 0 if clamped.
-        # x_A update: sub + abs + cmp + mul + cond + add = ~6
-        # e_A update: similar ~6
-        # Total per neuron ~= 17 (unclamped) or 12 (clamped)
+        total_neurons = batch_size * dim
         
-        flops_per_neuron = 12 if clamp_status else 17
-        total_flops = batch_size * dim * flops_per_neuron
+        # --- FLOPs Estimation ---
+        # Dense: Always update all neurons
+        # Approx cost per neuron: ~15 ops (add, mul, sub, threshold, update)
+        flops_dense = total_neurons * 15
 
-        # Memory Access (Bytes) estimation (Float32 = 4 bytes):
-        # Reads/Writes to state tensors (x_F, x_T, x_A, e_T, e_A, s_A, s_e, buffers)
-        # Roughly 10 state variables read/written per step per neuron.
-        # 10 vars * 4 bytes = 40 bytes per neuron per step (Read+Write mixed)
+        # Sparse: Update only if inputs (s_in, e_in) are active or internal state changes.
+        # Ideally, we track active internal neurons. Here we approximate using input activity ratio.
+        # If s_in_active_count is provided, use it. Otherwise assume dense.
+        if s_in_active_count is not None:
+            # Assume base cost for "waking up" + cost proportional to input activity
+            flops_sparse = (s_in_active_count + (e_in_active_count if e_in_active_count else 0)) * 15
+            # Clamp to max dense
+            flops_sparse = min(flops_sparse, flops_dense)
+        else:
+            flops_sparse = flops_dense
+
+        # --- Data Movement (Bytes) ---
+        # 10 state vars read/written * 4 bytes
         bytes_per_neuron = 10 * 4
-        total_bytes = batch_size * dim * bytes_per_neuron
+        dm_dense = total_neurons * bytes_per_neuron
         
-        return total_flops, total_bytes
+        if s_in_active_count is not None:
+            # Sparse access: Only read/write states for active neurons
+            dm_sparse = (s_in_active_count + (e_in_active_count if e_in_active_count else 0)) * bytes_per_neuron
+            dm_sparse = min(dm_sparse, dm_dense)
+        else:
+            dm_sparse = dm_dense
+            
+        return flops_dense, flops_sparse, dm_dense, dm_sparse
 
 
 # =========================
@@ -268,7 +289,6 @@ class DiffPCNetworkTorch(nn.Module):
             for i in range(len(self.cfg.layer_dims) - 1)
         ])
         
-        # v2-style dropout modules (used when cfg.v1_dropout == False)
         self.dropout_layers = nn.ModuleList([
             nn.Dropout(p=cfg.dropout_rate) for _ in range(len(self.W))
         ])
@@ -301,20 +321,21 @@ class DiffPCNetworkTorch(nn.Module):
         self._global_step = 0
         self._bias_fired_once = False
 
-        # v1-style dropout state (used only if cfg.v1_dropout == True)
         self._v1_dropout_active: bool = False
         self._v1_drop_masks: List[Optional[torch.Tensor]] = [None] * len(self.layers)
         self._layer_dims: List[int] = list(cfg.layer_dims[1:])
 
-        # Accumulators for cost calculation
-        self._step_flops = 0.0
-        self._step_bytes = 0.0
+        # Accumulators for cost calculation (Step-level)
+        self._metrics = {
+            'flops_dense': 0.0, 'flops_sparse': 0.0,
+            'dm_dense': 0.0, 'dm_sparse': 0.0,
+            'bits_dense': 0.0, 'bits_sparse': 0.0
+        }
 
     def reset_all_states(self, batch_size: int):
         for lyr in [self.input_driver, *self.layers]:
             lyr._alloc(batch_size); lyr.time_step = 1
         self._global_step = 0
-        # runner controls _bias_fired_once
     
     def set_training(self, flag: bool):
         self.train(flag)
@@ -323,15 +344,12 @@ class DiffPCNetworkTorch(nn.Module):
 
     @torch.no_grad()
     def set_v1_dropout(self, active: bool, batch_size: int, redraw: bool = True):
-        """Fixed-mask dropout (v1 style), hidden layers only; final layer untouched."""
         if not active or self.cfg.dropout_rate <= 0.0:
             self._v1_dropout_active = False
-            for i in range(len(self._v1_drop_masks)):
-                self._v1_drop_masks[i] = None
+            for i in range(len(self._v1_drop_masks)): self._v1_drop_masks[i] = None
             return
 
-        if self._v1_dropout_active and not redraw:
-            return
+        if self._v1_dropout_active and not redraw: return
 
         self._v1_dropout_active = True
         keep_prob = 1.0 - self.cfg.dropout_rate
@@ -340,9 +358,7 @@ class DiffPCNetworkTorch(nn.Module):
                 self._v1_drop_masks[i] = None
             else:
                 dim = self._layer_dims[i]
-                self._v1_drop_masks[i] = torch.bernoulli(
-                    torch.full((batch_size, dim), keep_prob, device=self.device)
-                )
+                self._v1_drop_masks[i] = torch.bernoulli(torch.full((batch_size, dim), keep_prob, device=self.device))
 
     def swap_schedulers(self, l_t_sched: LTBaseScheduler, y_sched: YBaseScheduler):
         for lyr in [self.input_driver, *self.layers]:
@@ -356,100 +372,165 @@ class DiffPCNetworkTorch(nn.Module):
         if layer_index == 0: self.input_driver_clamp, self.input_driver_data = clamp, data
         else: self._clamp_switch[layer_index-1], self._data_bucket[layer_index-1] = clamp, data
 
+    def _calc_matrix_ops_cost(self, input_tensor: torch.Tensor, dim_out: int, is_bias: bool = False):
+        """Helper to calculate FLOPs and Memory for Matrix Mult."""
+        batch_size, dim_in = input_tensor.shape
+        threshold = 1e-6
+        
+        # Count active inputs (Pseudo-Spikes)
+        num_active = (input_tensor.abs() > threshold).sum().item()
+        
+        # --- FLOPs ---
+        # Dense: Batch * In * Out * 2 (MAC)
+        f_dense = batch_size * dim_in * dim_out * (1.0 if is_bias else 2.0)
+        # Sparse: Active * Out * 2 (MAC)
+        f_sparse = num_active * dim_out * (1.0 if is_bias else 2.0)
+        
+        # --- Data Movement (Bytes) ---
+        # Weights (Float32 = 4 bytes)
+        # Dense: Read all weights
+        dm_dense = (dim_in * dim_out) * 4.0
+        # Sparse: Read only rows for active inputs
+        dm_sparse = (num_active * dim_out) * 4.0
+        
+        # Input/Output Data Read/Write (Dense assumption for I/O for simplicity, or sparse if optimized)
+        # Here we assume standard read input / write output
+        dm_io = (batch_size * dim_in + batch_size * dim_out) * 4.0
+        dm_dense += dm_io
+        # For sparse, we read only active input values, but write all output values (until thresholded later)
+        dm_sparse += (num_active + batch_size * dim_out) * 4.0
+
+        return f_dense, f_sparse, dm_dense, dm_sparse
+
     @torch.no_grad()
     def _build_s_in_and_e_in(self):
         s_in, e_in = [], []
         
-        # Cost Accumulation
-        current_flops = 0.0
-        current_bytes = 0.0
+        # Reset step metrics
+        self._metrics = {k: 0.0 for k in self._metrics}
 
         sd = self.layers[0].sampling_duration if len(self.layers) > 0 else 1
         t  = self._global_step % sd
 
-        # v2 bias: one-time at t == 1
         emit_bias = (not self._bias_fired_once) and (t == 1)
         if emit_bias:
-            bias_spike = 1.0
-            self._bias_fired_once = True
+            bias_spike = 1.0; self._bias_fired_once = True
         else:
             bias_spike = 0.0
 
-        # consume previous-tick spikes
         prev_s = self.input_driver.s_A_prev
-        batch_size = prev_s.size(0)
-
+        
+        # --- Forward Pass Calculations ---
         for l, w in enumerate(self.W):
-            # Matrix Mult (Forward): B x Din @ Din x Dout -> B x Dout
-            # FLOPs: 2 * B * Din * Dout
             din, dout = w.shape[1], w.shape[0]
-            current_flops += 2.0 * batch_size * din * dout
-            # Memory: Read W (4 bytes * Din * Dout)
-            current_bytes += 4.0 * din * dout
             
+            # Cost Calculation (Forward Matrix Mult)
+            fd, fs, dmd, dms = self._calc_matrix_ops_cost(prev_s, dout)
+            self._metrics['flops_dense'] += fd; self._metrics['flops_sparse'] += fs
+            self._metrics['dm_dense'] += dmd;   self._metrics['dm_sparse'] += dms
+            
+            # Actual Op
             s_in_l = prev_s @ w.T
 
+            # Dropout & Bias logic (simplified cost: bias is 1 op per neuron)
             if self.cfg.v1_dropout:
-                # apply fixed masks on s_in flow (v1)
-                if self._v1_dropout_active:
-                    pass
-                # In V1 we mask only errors
+                pass
             else:
-                # v2 nn.Dropout only when training and not the last layer
                 if self.training and l < len(self.W) - 1:
                     s_in_l = self.dropout_layers[l](s_in_l)
 
             if bias_spike != 0.0:
                 s_in_l.add_(self.W_bias[l].T)
-                current_flops += batch_size * dout # Bias add
+                # Bias add cost
+                bs = s_in_l.size(0)
+                self._metrics['flops_dense'] += bs * dout
+                self._metrics['flops_sparse'] += bs * dout # Bias is dense add usually
 
             s_in.append(s_in_l)
             prev_s = self.layers[l].s_A_prev
 
+        # --- Backward Pass Calculations ---
         for l in range(len(self.layers)):
             if l < len(self.layers) - 1:
-                # Matrix Mult (Backward): B x Dout @ Dout x Din -> B x Din
                 w_next = self.W[l+1]
-                din, dout = w_next.shape[1], w_next.shape[0]
-                current_flops += 2.0 * batch_size * dout * din
-                # Memory: Read W (4 bytes * Din * Dout) - technically read again if not cached
-                current_bytes += 4.0 * din * dout
+                din, dout = w_next.shape[1], w_next.shape[0] # Note: W is (Dout_next, Dout_curr)
+                
+                # Feedback input comes from s_e_prev of next layer
+                feedback_input = self.layers[l+1].s_e_prev
+                
+                # Cost Calculation (Backward Matrix Mult: e * W)
+                # Input to matmul is (Batch, Dout), Output is (Batch, Din)
+                # W is (Dout, Din)
+                fd, fs, dmd, dms = self._calc_matrix_ops_cost(feedback_input, din)
+                self._metrics['flops_dense'] += fd; self._metrics['flops_sparse'] += fs
+                self._metrics['dm_dense'] += dmd;   self._metrics['dm_sparse'] += dms
 
-                e_in_l = self.layers[l+1].s_e_prev @ w_next
-                if self.cfg.v1_dropout:
-                    # mask feedback path for v1 if next layer is masked
-                    if self._v1_dropout_active and self._v1_drop_masks[l+1] is not None:
-                        e_in_l = (self.layers[l+1].s_e_prev * self._v1_drop_masks[l+1]) @ w_next
+                e_in_l = feedback_input @ w_next
+                
+                if self.cfg.v1_dropout and self._v1_dropout_active and self._v1_drop_masks[l+1] is not None:
+                     e_in_l = (self.layers[l+1].s_e_prev * self._v1_drop_masks[l+1]) @ w_next
             else:
                 e_in_l = torch.zeros_like(self.layers[l].s_e_prev)
             e_in.append(e_in_l)
 
-        self._step_flops = current_flops
-        self._step_bytes = current_bytes
         return s_in, e_in
+    
+    def _accumulate_transfer_bits(self):
+        """Calculates Transfer Bits (Communication Bandwidth)."""
+        # Collect all communicating tensors: s_A_prev (forward) and s_e_prev (backward)
+        # Input driver only sends s_A
+        communicating_tensors = [self.input_driver.s_A_prev] 
+        # Layers send s_A (forward) and s_e (backward)
+        for lyr in self.layers:
+            communicating_tensors.append(lyr.s_A_prev)
+            communicating_tensors.append(lyr.s_e_prev)
+            
+        for x in communicating_tensors:
+            num_elements = x.numel()
+            n_neurons = x.shape[1]
+            num_active = (x.abs() > 1e-6).sum().item()
+            
+            # Dense: All 32-bit
+            self._metrics['bits_dense'] += num_elements * 32
+            
+            # Sparse: Active * (32-bit val + Address)
+            # Address bits = log2(N_neurons)
+            addr_bits = math.ceil(math.log2(n_neurons)) if n_neurons > 1 else 1
+            self._metrics['bits_sparse'] += num_active * (32 + addr_bits)
 
     @torch.no_grad()
     def one_time_step(self):
-        B  = self.input_driver.x_F.size(0)
-        z  = torch.zeros(B, self.input_driver.dim, device=self.device)
+        B = self.input_driver.x_F.size(0)
+        z = torch.zeros(B, self.input_driver.dim, device=self.device)
         sd = self.input_driver.sampling_duration
         t  = self._global_step % sd
 
+        # 1. Matrix Multiplications & Costs
         s_in, e_in = self._build_s_in_and_e_in()
         
-        # Accumulate element-wise costs
-        f, m = self.input_driver.get_elementwise_costs(B, self.input_driver_clamp)
-        self._step_flops += f; self._step_bytes += m
-
-        self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, z,
-                               sample_step_override=t)
+        # 2. Transfer Bits Cost
+        self._accumulate_transfer_bits()
         
+        # 3. Element-wise Steps & Costs
+        # Input Driver
+        # Input driver receives no s_in/e_in from network, so active counts are 0
+        fd, fs, dmd, dms = self.input_driver.get_elementwise_costs(B, self.input_driver_clamp, 0, 0)
+        self._metrics['flops_dense'] += fd; self._metrics['flops_sparse'] += fs
+        self._metrics['dm_dense'] += dmd;   self._metrics['dm_sparse'] += dms
+        
+        self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, z, sample_step_override=t)
+        
+        # Layers
         for i, lyr in enumerate(self.layers):
-            f, m = lyr.get_elementwise_costs(B, self._clamp_switch[i])
-            self._step_flops += f; self._step_bytes += m
+            # Count active inputs for sparse element-wise cost estimation
+            s_act = (s_in[i].abs() > 1e-6).sum().item()
+            e_act = (e_in[i].abs() > 1e-6).sum().item()
             
-            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i],
-                     sample_step_override=t)
+            fd, fs, dmd, dms = lyr.get_elementwise_costs(B, self._clamp_switch[i], s_act, e_act)
+            self._metrics['flops_dense'] += fd; self._metrics['flops_sparse'] += fs
+            self._metrics['dm_dense'] += dmd;   self._metrics['dm_sparse'] += dms
+            
+            lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i], sample_step_override=t)
         
         self._global_step += 1
 
@@ -464,12 +545,10 @@ class DiffPCNetworkTorch(nn.Module):
             post_eT = lyr.e_T
 
             if self.cfg.v1_dropout and self._v1_dropout_active:
-                # apply fixed masks to pre/post in v1 style
                 if l > 0 and self._v1_drop_masks[l-1] is not None:
                     pre_xT = pre_xT * self._v1_drop_masks[l-1]
                 if self._v1_drop_masks[l] is not None:
                     post_eT = post_eT * self._v1_drop_masks[l]
-            # v2 path: nn.Dropout is already applied during forward when training=True
 
             self.W[l].grad = - (post_eT.T @ torch.relu(pre_xT)) / Bf
             self.W_bias[l].grad = - post_eT.sum(dim=0, keepdim=True).T / Bf
@@ -477,26 +556,6 @@ class DiffPCNetworkTorch(nn.Module):
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias), self.cfg.clip_grad_norm)
         self.optimizer.step()
-    
-    def calculate_mdl(self, batch_size: int) -> float:
-        """
-        Calculates Minimum Description Length (MDL) approximation.
-        MDL = L(Data|Model) + L(Model)
-        L(Data|Model) ~ 0.5 * Sum(Squared Errors at Input Layer)
-        L(Model) ~ 0.5 * weight_decay * Sum(Squared Weights)
-        """
-        # 1. Data Cost (Reconstruction Error Energy)
-        # Using Input Layer error e_T (reconstruction error)
-        data_cost = 0.5 * torch.sum(self.input_driver.e_T ** 2).item()
-        
-        # 2. Model Cost (Weight Energy / Complexity)
-        # Using L2 norm of weights scaled by a small factor (lambda) often represented by weight decay
-        model_cost = 0.0
-        w_decay = self.cfg.adamw_weight_decay if self.cfg.adamw_weight_decay > 0 else 1e-5
-        for p in self.parameters():
-            model_cost += 0.5 * w_decay * torch.sum(p ** 2).item()
-            
-        return data_cost + model_cost
 
 
 # =========================
@@ -516,7 +575,6 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps_phase1
     
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-
     spike_stats = SpikeStats()
 
     # Phase-1
@@ -525,68 +583,63 @@ def run_batch_two_phase(net: DiffPCNetworkTorch, x: torch.Tensor, y_onehot: torc
     net.swap_schedulers(l_t_sched, y_phase1)
 
     if cfg.v1_dropout:
-        net.set_training(False)                       # logic states as in v2 P1
-        net.set_v1_dropout(True, x.size(0), redraw=True)  # v1 masks ON in P1
+        net.set_training(False)
+        net.set_v1_dropout(True, x.size(0), redraw=True)
     else:
-        net.set_training(False)                       # v2: no dropout in P1
+        net.set_training(False)
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
     
     for _ in range(steps_phase1): 
         net.one_time_step()
-        spike_stats.flops += net._step_flops
-        spike_stats.data_movement_bytes += net._step_bytes
+        spike_stats.flops_dense += net._metrics['flops_dense']
+        spike_stats.flops_sparse += net._metrics['flops_sparse']
+        spike_stats.dm_dense += net._metrics['dm_dense']
+        spike_stats.dm_sparse += net._metrics['dm_sparse']
+        spike_stats.bits_dense += net._metrics['bits_dense']
+        spike_stats.bits_sparse += net._metrics['bits_sparse']
 
-    # Phase-2 (continue state)
+    # Phase-2
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
     l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase2)
 
     if cfg.v1_dropout:
         net.set_training(True)
-        net.set_v1_dropout(True, x.size(0), redraw=False)  # reuse same masks in P2
+        net.set_v1_dropout(True, x.size(0), redraw=False)
     else:
-        net.set_training(True)                      # v2: nn.Dropout active now
+        net.set_training(True)
 
     net.set_clamp(len(net.layers), True, y_onehot)
     
     for _ in range(steps_phase2):
         net.one_time_step()
-        spike_stats.flops += net._step_flops
-        spike_stats.data_movement_bytes += net._step_bytes
+        spike_stats.flops_dense += net._metrics['flops_dense']
+        spike_stats.flops_sparse += net._metrics['flops_sparse']
+        spike_stats.dm_dense += net._metrics['dm_dense']
+        spike_stats.dm_sparse += net._metrics['dm_sparse']
+        spike_stats.bits_dense += net._metrics['bits_dense']
+        spike_stats.bits_sparse += net._metrics['bits_sparse']
 
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
 
-    # --- Error Stats ---
+    # Error Stats
     batch_size = x.size(0)
     if batch_size > 0:
-        # 1. Input Layer (Reconstruction)
-        input_err_sum = net.input_driver.e_T.abs().sum().item()
-        spike_stats.et_input = input_err_sum / batch_size / net.input_driver.dim
-        
-        # 2. Output Layer (Classification)
-        output_layer = net.layers[-1]
-        output_err_sum = output_layer.e_T.abs().sum().item()
-        spike_stats.et_output = output_err_sum / batch_size / output_layer.dim
-        
-        # 3. Hidden Layers
-        hidden_err_sum = 0.0
-        hidden_neurons = 0
+        spike_stats.et_input = net.input_driver.e_T.abs().sum().item() / batch_size / net.input_driver.dim
+        spike_stats.et_output = net.layers[-1].e_T.abs().sum().item() / batch_size / net.layers[-1].dim
+        hidden_err_sum, hidden_neurons = 0.0, 0
         for i in range(len(net.layers) - 1):
-            lyr = net.layers[i]
-            hidden_err_sum += lyr.e_T.abs().sum().item()
-            hidden_neurons += lyr.dim
+            hidden_err_sum += net.layers[i].e_T.abs().sum().item()
+            hidden_neurons += net.layers[i].dim
         if hidden_neurons > 0:
             spike_stats.et_hidden = hidden_err_sum / batch_size / hidden_neurons
     
-    # --- MDL Calculation ---
-    spike_stats.mdl = net.calculate_mdl(batch_size)
-    # -----------------------
-    
     net.apply_phase2_update()
+    
     return net.layers[-1].x_T.clone(), spike_stats
 
 @torch.no_grad()
@@ -605,9 +658,9 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
 
     if cfg.v1_dropout:
         net.set_training(False)
-        net.set_v1_dropout(False, x.size(0))   # no dropout in inference
+        net.set_v1_dropout(False, x.size(0))
     else:
-        net.set_training(False)                # v2: no dropout in inference
+        net.set_training(False)
 
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
@@ -615,8 +668,13 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
     spike_stats = SpikeStats()
     for _ in range(steps):
         net.one_time_step()
-        spike_stats.flops += net._step_flops
-        spike_stats.data_movement_bytes += net._step_bytes
+        # Accumulate costs during inference too
+        spike_stats.flops_dense += net._metrics['flops_dense']
+        spike_stats.flops_sparse += net._metrics['flops_sparse']
+        spike_stats.dm_dense += net._metrics['dm_dense']
+        spike_stats.dm_sparse += net._metrics['dm_sparse']
+        spike_stats.bits_dense += net._metrics['bits_dense']
+        spike_stats.bits_sparse += net._metrics['bits_sparse']
 
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
@@ -632,32 +690,14 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
 def main(cfg: DiffPCConfig):
     # Setup
     torch.manual_seed(cfg.seed)
-    
-    requested = str(cfg.device).lower()
-    if requested.startswith("cuda"):
-        if torch.cuda.is_available():
-            try:
-                device = torch.device(requested)
-                if device.index is not None and device.index >= torch.cuda.device_count():
-                    print(f"Warning: Requested {requested} but only {torch.cuda.device_count()} CUDA device(s) available. Using cuda:0.")
-                    device = torch.device("cuda:0")
-                torch.cuda.set_device(device)
-            except Exception as e:
-                print(f"Warning: Could not use '{requested}' ({e}). Falling back to cuda:0.")
-                device = torch.device("cuda:0")
-                torch.cuda.set_device(device)
-        else:
-            print("Warning: CUDA requested but not available. Using CPU.")
-            device = torch.device("cpu")
-    else:
-        device = torch.device(requested)
+    device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
 
     run_name = cfg.run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     log_dir = "runs"
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{run_name}.json")
     plot_path = os.path.join(log_dir, f"{run_name}_error.png")
-    cost_plot_path = os.path.join(log_dir, f"{run_name}_cost.png") # New plot path for costs
+    cost_plot_path = os.path.join(log_dir, f"{run_name}_cost.png")
 
     # Network and Schedulers
     l_t_spec = {
@@ -676,28 +716,9 @@ def main(cfg: DiffPCConfig):
     )
     
     # Data transforms
-    if cfg.use_fashion_mnist:
-        mean, std = 0.2860, 0.3530
-    else:
-        mean, std = 0.1307, 0.3081
-
-    train_transforms_list = []
-    if cfg.random_crop_padding > 0:
-        if cfg.use_fashion_mnist:
-            train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding, padding_mode="edge"))
-        else:
-            train_transforms_list.append(transforms.RandomCrop(28, padding=cfg.random_crop_padding))
-    if cfg.use_fashion_mnist and cfg.fmnist_hflip_p > 0.0:
-        train_transforms_list.append(transforms.RandomHorizontalFlip(p=cfg.fmnist_hflip_p))
-    train_transforms_list.append(transforms.ToTensor())
-    if cfg.normalize:
-        train_transforms_list.append(transforms.Normalize((mean,), (std,)))
-    train_transform = transforms.Compose(train_transforms_list)
-
-    test_transforms_list = [transforms.ToTensor()]
-    if cfg.normalize:
-        test_transforms_list.append(transforms.Normalize((mean,), (std,)))
-    test_transform = transforms.Compose(test_transforms_list)
+    mean, std = (0.2860, 0.3530) if cfg.use_fashion_mnist else (0.1307, 0.3081)
+    train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((mean,), (std,))])
+    test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((mean,), (std,))])
 
     if cfg.use_fashion_mnist:
         train_ds = datasets.FashionMNIST("./data", train=True,  download=True, transform=train_transform)
@@ -706,139 +727,109 @@ def main(cfg: DiffPCConfig):
         train_ds = datasets.MNIST("./data", train=True,  download=True, transform=train_transform)
         test_ds  = datasets.MNIST("./data", train=False, download=True, transform=test_transform)
     
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=0)
+    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=0)
 
-    def to_vec(x: torch.Tensor) -> torch.Tensor:
-        return x.view(x.size(0), -1).to(device)
-    def to_onehot(y: torch.Tensor) -> torch.Tensor:
-        return F.one_hot(y, num_classes=cfg.layer_dims[-1]).float().to(device)
+    def to_vec(x: torch.Tensor) -> torch.Tensor: return x.view(x.size(0), -1).to(device)
+    def to_onehot(y: torch.Tensor) -> torch.Tensor: return F.one_hot(y, num_classes=cfg.layer_dims[-1]).float().to(device)
 
     run_results = []
     # Store history for plots
-    history_input, history_hidden, history_output = [], [], []
-    history_flops, history_bytes, history_mdl = [], [], []
+    h_flops_d, h_flops_s = [], []
+    h_dm_d, h_dm_s = [], []
+    h_bits_d, h_bits_s = [], []
     
     total_neurons = sum(cfg.layer_dims[1:])
 
-    print(f"Starting run: {run_name}")
-    print(f"Using device: {device}")
-    print(f"Logging to: {log_path}")
+    print(f"Starting run: {run_name} on {device}")
 
     for epoch in range(1, cfg.epochs + 1):
         # Training
-        total_sa_train_p2, total_se_train_p2 = 0.0, 0.0
-        total_flops, total_bytes, total_mdl = 0.0, 0.0, 0.0
+        ep_stats = SpikeStats()
         num_batches = 0
 
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
-            total_sa_train_p2 += stats.sa_total
-            total_se_train_p2 += stats.se_total
             
             # Aggregate Costs
-            total_flops += stats.flops
-            total_bytes += stats.data_movement_bytes
-            total_mdl += stats.mdl
+            ep_stats.flops_dense += stats.flops_dense
+            ep_stats.flops_sparse += stats.flops_sparse
+            ep_stats.dm_dense += stats.dm_dense
+            ep_stats.dm_sparse += stats.dm_sparse
+            ep_stats.bits_dense += stats.bits_dense
+            ep_stats.bits_sparse += stats.bits_sparse
             num_batches += 1
 
-            # Append per-batch stats for granular plotting
-            history_input.append(stats.et_input)
-            history_hidden.append(stats.et_hidden)
-            history_output.append(stats.et_output)
-            history_flops.append(stats.flops)
-            history_bytes.append(stats.data_movement_bytes / (1024**2)) # MB
-            history_mdl.append(stats.mdl)
+            # Append per-batch stats for plots
+            h_flops_d.append(stats.flops_dense); h_flops_s.append(stats.flops_sparse)
+            h_dm_d.append(stats.dm_dense / (1024**2)); h_dm_s.append(stats.dm_sparse / (1024**2))
+            h_bits_d.append(stats.bits_dense / 1e9); h_bits_s.append(stats.bits_sparse / 1e9)
 
         # Evaluation
         train_correct, train_total = 0, 0
         test_correct, test_total = 0, 0
-        total_sa_test_p1, total_se_test_p1 = 0.0, 0.0
 
         with torch.no_grad():
             for images, labels in train_loader:
                 logits, _ = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
-                preds = logits.argmax(dim=1).cpu()
-                train_correct += (preds == labels).sum().item()
+                train_correct += (logits.argmax(dim=1).cpu() == labels).sum().item()
                 train_total   += labels.size(0)
 
             for images, labels in test_loader:
-                logits, stats = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
-                preds = logits.argmax(dim=1).cpu()
-                test_correct += (preds == labels).sum().item()
+                logits, _ = infer_batch_forward_only(net, to_vec(images), cfg, l_t_spec)
+                test_correct += (logits.argmax(dim=1).cpu() == labels).sum().item()
                 test_total   += labels.size(0)
-                total_sa_test_p1 += stats.sa_total
-                total_se_test_p1 += stats.se_total
 
         train_acc = 100.0 * train_correct / train_total
         test_acc  = 100.0 * test_correct  / test_total
 
-        denom_train = total_neurons * len(train_ds)
-        denom_test  = total_neurons * len(test_ds)
-        avg_sa_train_p2 = total_sa_train_p2 / denom_train if denom_train > 0 else 0
-        avg_se_train_p2 = total_se_train_p2 / denom_train if denom_train > 0 else 0
-        avg_sa_test_p1  = total_sa_test_p1  / denom_test  if denom_test  > 0 else 0
-        avg_se_test_p1  = total_se_test_p1  / denom_test  if denom_test  > 0 else 0
-        
         # Avg costs per batch
-        avg_flops_giga = (total_flops / num_batches) / 1e9
-        avg_bytes_mb   = (total_bytes / num_batches) / (1024**2)
-        avg_mdl        = total_mdl / num_batches
+        avg_flops_d_g = (ep_stats.flops_dense / num_batches) / 1e9
+        avg_flops_s_g = (ep_stats.flops_sparse / num_batches) / 1e9
+        avg_dm_d_mb   = (ep_stats.dm_dense / num_batches) / (1024**2)
+        avg_dm_s_mb   = (ep_stats.dm_sparse / num_batches) / (1024**2)
+        avg_bits_d_gb = (ep_stats.bits_dense / num_batches) / 1e9
+        avg_bits_s_gb = (ep_stats.bits_sparse / num_batches) / 1e9
 
         print(
-            f"Epoch {epoch:02d}: train acc {train_acc:.2f}% | test acc {test_acc:.2f}% | "
-            f"Avg Spikes/N: sa={avg_sa_train_p2:.2f}, se={avg_se_train_p2:.2f} | "
-            f"Avg Costs/Batch: {avg_flops_giga:.2f} GFLOPs, {avg_bytes_mb:.2f} MB, MDL={avg_mdl:.1f}"
+            f"Epoch {epoch:02d}: Tr {train_acc:.1f}% / Te {test_acc:.1f}% | "
+            f"FLOPs(G): D={avg_flops_d_g:.1f}, S={avg_flops_s_g:.1f} | "
+            f"DM(MB): D={avg_dm_d_mb:.1f}, S={avg_dm_s_mb:.1f} | "
+            f"Bits(Gb): D={avg_bits_d_gb:.1f}, S={avg_bits_s_gb:.1f}"
         )
 
         run_results.append({
-            "epoch": epoch,
-            "train_acc": train_acc,
-            "test_acc": test_acc,
-            "avg_spikes_per_neuron_train_p2_sa": avg_sa_train_p2,
-            "avg_spikes_per_neuron_train_p2_se": avg_se_train_p2,
-            "avg_flops_per_batch": avg_flops_giga * 1e9,
-            "avg_bytes_per_batch": avg_bytes_mb * (1024**2),
-            "avg_mdl_per_batch": avg_mdl
+            "epoch": epoch, "train_acc": train_acc, "test_acc": test_acc,
+            "avg_flops_dense_G": avg_flops_d_g, "avg_flops_sparse_G": avg_flops_s_g,
+            "avg_dm_dense_MB": avg_dm_d_mb, "avg_dm_sparse_MB": avg_dm_s_mb,
+            "avg_bits_dense_Gb": avg_bits_d_gb, "avg_bits_sparse_Gb": avg_bits_s_gb
         })
 
     # Save Results
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
 
-    # --- Plotting Errors ---
-    print("Generating error plot...")
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    axes[0].plot(history_input, color='orange', alpha=0.8); axes[0].set_title('Input Layer (Reconstruction)'); axes[0].set_ylabel('Mean |e_T|')
-    axes[1].plot(history_hidden, color='green', alpha=0.8); axes[1].set_title('Hidden Layers (Internal)'); axes[1].set_ylabel('Mean |e_T|')
-    axes[2].plot(history_output, color='blue', alpha=0.8); axes[2].set_title('Output Layer (Classification)'); axes[2].set_ylabel('Mean |e_T|')
-    for ax in axes: ax.grid(True, alpha=0.3); ax.set_xlabel('Batch Iterations')
-    plt.tight_layout(); plt.savefig(plot_path); plt.close()
-    
     # --- Plotting Costs ---
     print("Generating cost plot...")
     fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
-    axes2[0].plot(history_flops, color='red', alpha=0.8); axes2[0].set_title('Computational Cost (FLOPs)'); axes2[0].set_ylabel('FLOPs per Batch')
-    axes2[1].plot(history_bytes, color='purple', alpha=0.8); axes2[1].set_title('Data Movement (Memory Access)'); axes2[1].set_ylabel('MB per Batch')
-    axes2[2].plot(history_mdl, color='black', alpha=0.8); axes2[2].set_title('Minimum Description Length (Energy)'); axes2[2].set_ylabel('MDL (Error+Weight)')
+    
+    axes2[0].plot(h_flops_d, label='Dense', color='red', alpha=0.5)
+    axes2[0].plot(h_flops_s, label='Sparse', color='green', alpha=0.8)
+    axes2[0].set_title('FLOPs'); axes2[0].set_ylabel('Ops/Batch'); axes2[0].legend()
+
+    axes2[1].plot(h_dm_d, label='Dense', color='red', alpha=0.5)
+    axes2[1].plot(h_dm_s, label='Sparse', color='green', alpha=0.8)
+    axes2[1].set_title('Data Movement'); axes2[1].set_ylabel('MB/Batch'); axes2[1].legend()
+
+    axes2[2].plot(h_bits_d, label='Dense', color='red', alpha=0.5)
+    axes2[2].plot(h_bits_s, label='Sparse', color='green', alpha=0.8)
+    axes2[2].set_title('Transfer Bits'); axes2[2].set_ylabel('Gb/Batch'); axes2[2].legend()
+
     for ax in axes2: ax.grid(True, alpha=0.3); ax.set_xlabel('Batch Iterations')
     plt.tight_layout(); plt.savefig(cost_plot_path); plt.close()
     
-    print(f"Plots saved to {plot_path} and {cost_plot_path}")
+    print(f"Plots saved to {cost_plot_path}")
     print(f"\nRun complete. Results saved to {log_path}")
-
-def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
-    if seq_len is None:
-        seq_len = 2 * cfg.lt_n
-    print("\n--- Running l_t Scheduler Sanity Check ---")
-    sched = get_l_t_scheduler(cfg.lt_scheduler_type, {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a})
-    sched.begin_phase(0, seq_len * 5, a=cfg.lt_a)
-    for t in range(seq_len):
-        lt_now = sched.get_l_t(t, True)
-        lt_prev_correct = sched.get_l_t(t - 1, True) if t > 0 else 0.0
-        print(f"t={t:02d} | l_t(t-1): {lt_prev_correct: >9.6f} | l_t(t): {lt_now: >9.6f}")
-    print("--- End of Sanity Check ---\n")
-
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
@@ -860,13 +851,11 @@ if __name__ == "__main__":
         adamw_eps=1e-08,
         clip_grad_norm=1.0,
         seed=2,
-        run_name="mnist_costs_check",
+        run_name="mnist_400h",
         use_fashion_mnist=False,
-        dropout_rate=0.5,
-        v1_dropout=False,
         random_crop_padding=2,
         normalize=True,
         fmnist_hflip_p=0.0,
-        device="cuda:0"
+        device="cuda:0" # Adjust device ID if necessary
     )
     main(cfg)

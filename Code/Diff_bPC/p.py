@@ -904,7 +904,7 @@ def main(cfg: DiffPCConfig):
 
         print(
             f"Epoch {epoch:02d}: train acc {train_acc:.2f}% | test acc {test_acc:.2f}% | "
-            f"Avg Spikes (Train P2): s_a={avg_sa_train_p2:.2f}, s_e_disc={avg_se_disc_train_p2:.2f}"
+            f"Avg Spikes (Train P2): s_a={avg_sa_train_p2:.2f}, s_e_disc={avg_se_disc_train_p2:.2f}, s_e_gen={avg_se_gen_train_p2:.2f}"
         )
         print(f"  > Avg Err (End of Phase2): InputGen={epoch_avg_error['input_gen']:.4f}, "
               f"L1_Disc={epoch_avg_error['layers_disc'][0]:.4f}, L1_Gen={epoch_avg_error['layers_gen'][0]:.4f}")
@@ -924,23 +924,23 @@ def main(cfg: DiffPCConfig):
 if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
-        lt_m=-1,
+        lt_m=0,
         lt_n=5,
         lt_a=1.0,
         
         # --- MODIFICATION: New specific mins ---
-        lt_min_a=0.0625,
-        lt_min_e_disc=0.0625,
+        lt_min_a=0.0,
+        lt_min_e_disc=0.0,
         lt_min_e_gen=0.0,
         # ---------------------------------------
 
         lt_scheduler_type="cyclic_phase",
-        gamma_value=0.05,
+        gamma_value=0.1,
         gamma_every_n=None,
-        t_init_cycles=15,
-        phase2_cycles=15,
+        t_init_cycles=20,
+        phase2_cycles=20,
         alpha_disc = 1,
-        alpha_gen = 0.01,
+        alpha_gen = 0.001,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,

@@ -1,0 +1,94 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_min_a": 0.0,
+        "lt_min_e_disc": 0.0,
+        "lt_min_e_gen": 0.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 20,
+        "phase2_cycles": 20,
+        "alpha_disc": 1,
+        "alpha_gen": 0.01,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.0,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "under_alpha",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "test_acc": 90.54,
+            "avg_sa": 0.034240731707317076
+        },
+        {
+            "epoch": 2,
+            "test_acc": 91.8,
+            "avg_sa": 0.029911504065040652
+        },
+        {
+            "epoch": 3,
+            "test_acc": 92.85,
+            "avg_sa": 0.030581422764227643
+        },
+        {
+            "epoch": 4,
+            "test_acc": 93.79,
+            "avg_sa": 0.03176768292682927
+        },
+        {
+            "epoch": 5,
+            "test_acc": 94.14,
+            "avg_sa": 0.03331536585365854
+        },
+        {
+            "epoch": 6,
+            "test_acc": 94.42,
+            "avg_sa": 0.034853048780487804
+        },
+        {
+            "epoch": 7,
+            "test_acc": 94.77,
+            "avg_sa": 0.036441666666666664
+        },
+        {
+            "epoch": 8,
+            "test_acc": 95.22,
+            "avg_sa": 0.03797577235772358
+        },
+        {
+            "epoch": 9,
+            "test_acc": 95.46,
+            "avg_sa": 0.0396990243902439
+        },
+        {
+            "epoch": 10,
+            "test_acc": 95.1,
+            "avg_sa": 0.041401056910569105
+        }
+    ]
+}

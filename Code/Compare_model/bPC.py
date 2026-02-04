@@ -40,14 +40,14 @@ COMMON_CONFIG = {
     'run_search': False,  # False にすれば探索なしモード
     'search_trials': 20, 
     'search_epochs': 25, 
-    'final_epochs': 40,    
+    'final_epochs': 20,    
     'fixed_params': {
         'activation': 'leaky_relu',
         'lr_activities': 0.0034549692255545815,
         'momentum': 0.0,
         'lr_weights': 5.7652236557134764e-05,
         'weight_decay': 0.0011400984979283125,
-        'alpha_gen': 0.001,  
+        'alpha_gen': 0.0001,  
         'alpha_disc': 1.0,    
         'T_train': 8,         
         'T_eval': 100         

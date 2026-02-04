@@ -20,12 +20,12 @@ from torchvision.utils import save_image
 @dataclass
 class DiffPCConfig:
     """Central configuration for the Generative DiffPC model."""
-    # CHANGED: Default dims reversed for Generative model (Label -> Hidden -> Image)
     layer_dims: list[int] = (10, 512, 784) 
     lt_m: int = 3; lt_n: int = 5; lt_a: float = 0.5
     lt_scheduler_type: str = "cyclic_phase"
     gamma_value: float = 0.2; gamma_every_n: Optional[int] = None
     t_init_cycles: int = 15; phase2_cycles: int = 15
+    alpha_in: float = 1.0; alpha_out: float = 1.0
     pc_lr: float = 5e-4
     batch_size: int = 256; epochs: int = 50
     use_adamw: bool = True
@@ -178,16 +178,13 @@ class DiffPCLayerTorch(nn.Module):
         self.l_t = l_t_cur
         self.y   = self.y_scheduler.get_y(sample_step, self.learning_weights)
 
-        # Forward Prediction Update (Top-down in GenPC)
         self.x_F.add_(self.s_in_data * l_t_prev)
-        self.e_T = self.x_T - self.x_F
+        self.e_T = self.alpha_in * (self.x_T - self.x_F)
         
-        # Error Input Accumulation (Bottom-up in GenPC)
         self.e_in_data.add_(e_in_recv.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            # Update Target Activity based on Prediction Error (Local) and Input Error (Bottom-up)
-            self.x_T.add_(self.y * (-self.e_T + (self.x_T > 0).float() * self.e_in_data))
+            self.x_T.add_(self.y * (-self.alpha_out * self.e_T + (self.x_T > 0).float() * self.alpha_out * self.e_in_data))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
@@ -221,7 +218,6 @@ class DiffPCNetworkTorch(nn.Module):
         super().__init__()
         self.device = torch.device(device)
         self.cfg = cfg
-        # In GenPC: W projects Top-down. W[0] connects Layer 0 (Label) to Layer 1 (Hidden).
         self.W = nn.ParameterList([
             nn.Parameter(torch.empty(cfg.layer_dims[i+1], cfg.layer_dims[i], device=self.device))
             for i in range(len(cfg.layer_dims)-1)
@@ -252,7 +248,8 @@ class DiffPCNetworkTorch(nn.Module):
         l_t_sched = get_l_t_scheduler(l_t_scheduler_spec["type"], l_t_scheduler_spec["args"])
         y_sched = get_y_scheduler(y_scheduler_spec["type"], {**y_scheduler_spec["args"], "l_t_scheduler": l_t_sched})
         layer_args = {"sampling_duration": 1, "learning_weights": True, "training": True,
-                      "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, "device": self.device}
+                      "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, 
+                      "alpha_in": cfg.alpha_in, "alpha_out": cfg.alpha_out, "device": self.device}
         self.layers = nn.ModuleList([DiffPCLayerTorch(dim=d, **layer_args) for d in cfg.layer_dims[1:]])
         self.input_driver = DiffPCLayerTorch(dim=cfg.layer_dims[0], **layer_args)
 
@@ -341,8 +338,7 @@ class DiffPCNetworkTorch(nn.Module):
             s_in.append(s_in_l)
             prev_s = self.layers[l].s_A_prev
 
-        # Backward error propagation (Bottom-up in GenPC)
-        e_in.append(self.layers[0].s_e_prev @ self.W[0]) # Error from Layer 1 -> Layer 0
+        e_in.append(self.layers[0].s_e_prev @ self.W[0]) 
         for l in range(len(self.layers)):
             if l < len(self.layers) - 1:
                 e_in_l = self.layers[l+1].s_e_prev @ self.W[l+1]
@@ -364,12 +360,10 @@ class DiffPCNetworkTorch(nn.Module):
 
         s_in, e_in = self._build_s_in_and_e_in()
 
-        # Input driver (Layer 0) gets e_in[0] from Layer 1. Forward input (s_in) is assumed 0 (top-level).
         self.input_driver.step(self.input_driver_clamp, self.input_driver_data, z, e_in[0],
                                sample_step_override=t)
         
         for i, lyr in enumerate(self.layers):
-            # Layer i+1 receives s_in[i] from Layer i and e_in[i+1] from Layer i+2 (or bottom if last)
             lyr.step(self._clamp_switch[i], self._data_bucket[i], s_in[i], e_in[i+1],
                      sample_step_override=t)
         
@@ -392,7 +386,7 @@ class DiffPCNetworkTorch(nn.Module):
                     post_eT = post_eT * self._v1_drop_masks[l]
 
             self.W[l].grad = - (post_eT.T @ torch.relu(pre_xT)) / Bf
-            self.W_bias[l].grad = - post_eT.sum(dim=0, keepdim=True).T / Bf
+            self.W_bias[l].grad = - cfg.alpha_out * post_eT.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias), self.cfg.clip_grad_norm)
@@ -405,13 +399,7 @@ class DiffPCNetworkTorch(nn.Module):
 
 @torch.no_grad()
 def run_gen_training_batch(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, image_flat: torch.Tensor,
-                           cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> SpikeStats:
-    """
-    Train GenPC:
-    - Input Driver (Layer 0) clamped to Label.
-    - Last Layer (Layer N) clamped to Image.
-    - Minimize error.
-    """
+                            cfg: DiffPCConfig, l_t_spec: dict, y_phase2_spec: dict) -> SpikeStats:
     lt_n = l_t_spec["args"]["n"]
     steps_phase1 = cfg.t_init_cycles * lt_n
     steps_phase2 = cfg.phase2_cycles * lt_n
@@ -423,12 +411,6 @@ def run_gen_training_batch(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, 
     
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
-    # Phase 1: Dreaming (Optional, but good for settling hidden states)
-    # Clamp Label, Unclamp Image (Generate). 
-    # NOTE: Standard DiffPC training often clamps both immediately in Phase 2 logic. 
-    # Here we mimic the provided code: Phase 1 (Settle), Phase 2 (Update).
-    # For GenPC, settling usually implies clamping the conditioning variable (Label).
-    
     y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
@@ -436,20 +418,13 @@ def run_gen_training_batch(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, 
     net.set_training(False)
     if cfg.v1_dropout: net.set_v1_dropout(True, label_onehot.size(0), redraw=True)
 
-    # Clamp Label (Layer 0), Unclamp Image (Layer N) initially to let hidden states form from Top-down?
-    # Or Clamp both? Standard PC clamps both to calculate errors.
-    # Let's Clamp Label, Unclamp Hidden, Clamp Image for Phase 1 to let errors propagate.
-    # Logic in Discriminative was: Clamp Input (Image), Unclamp Label.
-    # Logic in Generative Training: Clamp Input (Label), Clamp Output (Image).
-    
-    net.set_clamp(0, True, label_onehot) # Label
+    net.set_clamp(0, True, label_onehot) 
     for li in range(1, len(net.layers)): 
-        net.set_clamp(li, False) # Hidden
-    net.set_clamp(len(net.layers), True, image_flat) # Image
+        net.set_clamp(li, False) 
+    net.set_clamp(len(net.layers), True, image_flat) 
 
     for _ in range(steps_phase1): net.one_time_step()
 
-    # Phase 2: Learning
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
     l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase2)
@@ -457,7 +432,6 @@ def run_gen_training_batch(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, 
     net.set_training(True)
     if cfg.v1_dropout: net.set_v1_dropout(True, label_onehot.size(0), redraw=False)
 
-    # Keep clamps
     net.set_clamp(0, True, label_onehot)
     net.set_clamp(len(net.layers), True, image_flat)
     
@@ -487,6 +461,13 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
 
     net.set_training(False)
 
+    original_alphas = []
+    original_alphas.append(net.input_driver.alpha_out)
+    net.input_driver.alpha_out = 1.0
+    for lyr in net.layers:
+        original_alphas.append(lyr.alpha_out)
+        lyr.alpha_out = 1.0
+
     net.set_clamp(0, True, x)
     for li in range(1, len(net.layers) + 1): net.set_clamp(li, False)
     
@@ -496,19 +477,17 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
+
+    net.input_driver.alpha_out = original_alphas[0]
+    for i, lyr in enumerate(net.layers):
+        lyr.alpha_out = original_alphas[i+1]
             
     return net.layers[-1].x_T.clone(), spike_stats
 
 @torch.no_grad()
 def infer_classification_genpc(net: DiffPCNetworkTorch, image_flat: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> tuple[torch.Tensor, SpikeStats]:
-    """
-    Inference in GenPC (Classification):
-    - Clamp Image (Bottom).
-    - Unclamp Label (Top).
-    - Error propagates up, Label changes to minimize error.
-    """
     lt_n = l_t_spec["args"]["n"]
-    steps = (cfg.t_init_cycles + cfg.phase2_cycles) * lt_n # Give it enough time
+    steps = (cfg.t_init_cycles + cfg.phase2_cycles) * lt_n 
     net.set_sampling_duration(steps)
     net.reset_all_states(image_flat.size(0))
     net._bias_fired_once = False
@@ -521,14 +500,8 @@ def infer_classification_genpc(net: DiffPCNetworkTorch, image_flat: torch.Tensor
     net.set_training(False)
     if cfg.v1_dropout: net.set_v1_dropout(False, image_flat.size(0))
 
-    # Unclamp Label (Layer 0) - allow it to evolve
-    # Note: reset_all_states zeroes it out. This acts as a neutral prior.
     net.set_clamp(0, False, None) 
-    
-    # Unclamp Hidden
     for li in range(1, len(net.layers)): net.set_clamp(li, False)
-    
-    # Clamp Image (Layer N)
     net.set_clamp(len(net.layers), True, image_flat)
     
     spike_stats = SpikeStats()
@@ -538,68 +511,26 @@ def infer_classification_genpc(net: DiffPCNetworkTorch, image_flat: torch.Tensor
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
             
-    # Return Layer 0 (Label) activity
     return net.input_driver.x_T.clone(), spike_stats
-
-@torch.no_grad()
-def generate_samples(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, cfg: DiffPCConfig, l_t_spec: dict) -> torch.Tensor:
-    """
-    Generation Task:
-    - Clamp Label (Top).
-    - Unclamp Image (Bottom).
-    - Network generates image.
-    """
-    lt_n = l_t_spec["args"]["n"]
-    steps = cfg.t_init_cycles * lt_n
-    net.set_sampling_duration(steps)
-    net.reset_all_states(label_onehot.size(0))
-    net._bias_fired_once = False
-    
-    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
-    y_forward = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1.0, "n": 1})
-    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
-    net.swap_schedulers(l_t_sched, y_forward)
-
-    net.set_training(False)
-    if cfg.v1_dropout: net.set_v1_dropout(False, label_onehot.size(0))
-
-    # Clamp Label (Layer 0)
-    net.set_clamp(0, True, label_onehot)
-    
-    # Unclamp rest (Hidden and Image)
-    for li in range(1, len(net.layers) + 1): 
-        net.set_clamp(li, False)
-    
-    for _ in range(steps):
-        net.one_time_step()
-            
-    # Return Last Layer (Image) activity
-    return net.layers[-1].x_T.clone()
 
 
 # =========================
 #  MNIST training wrapper
 # =========================
 
-def generate_mnist_categories(net: DiffPCNetworkTorch, cfg: DiffPCConfig, l_t_spec: dict, device: torch.device, epoch: int, log_dir: str):
+def generate_mnist_categories(net: DiffPCNetworkTorch, cfg: DiffPCConfig, l_t_spec: dict, device: torch.device, epoch: int, current_run_dir: str):
+    """Saves generated samples into the specific run directory."""
     print("Generating category samples...")
-    # Create one-hot vectors for 0-9
     labels = torch.arange(10, device=device)
     labels_onehot = F.one_hot(labels, num_classes=10).float()
     
-    # Generate
     generated_flat, stats = infer_batch_forward_only(net, labels_onehot, cfg, l_t_spec)
     
-    # Reshape and Save
-    # MNIST/FMNIST is 28x28
     imgs = generated_flat.view(-1, 1, 28, 28)
-    # Denormalize if needed (visual approximation)
-    # Since network learns in normalized space, outputs might be outside [0,1].
-    # We clip or normalize for visualization.
-    imgs = torch.clamp(imgs, -1, 1) # assuming approx range
-    imgs = (imgs + 1) / 2.0 # -1..1 -> 0..1
+    imgs = torch.clamp(imgs, -1, 1) 
+    imgs = (imgs + 1) / 2.0 
     
-    save_path = os.path.join(log_dir, f"ggenerated_epoch_{epoch:03d}.png")
+    save_path = os.path.join(current_run_dir, f"generated_epoch_{epoch:03d}.png")
     save_image(imgs, save_path, nrow=5, normalize=False)
     print(f"Saved generated samples to {save_path}")
 
@@ -609,12 +540,22 @@ def main(cfg: DiffPCConfig):
     torch.manual_seed(cfg.seed)
     device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
 
-    run_name = cfg.run_name or f"genpc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    log_dir = "runs_genpc"
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"{run_name}.json")
+    # ====================================================
+    #  時刻付き run_name の生成とディレクトリ作成
+    # ====================================================
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base_name = cfg.run_name or "genpc_run"
+    run_name = f"{base_name}_{timestamp}"
+    
+    # メインの保存ディレクトリ
+    base_log_dir = "runs_genpc"
+    # 今回の試行専用ディレクトリ
+    current_run_dir = os.path.join(base_log_dir, run_name)
+    os.makedirs(current_run_dir, exist_ok=True)
+    
+    log_path = os.path.join(current_run_dir, "results.json")
+    # ====================================================
 
-    # Network and Schedulers
     l_t_spec = {
         "type": cfg.lt_scheduler_type,
         "args": {"m": cfg.lt_m, "n": cfg.lt_n, "a": cfg.lt_a}
@@ -664,23 +605,20 @@ def main(cfg: DiffPCConfig):
     total_neurons = sum(cfg.layer_dims[1:])
 
     print(f"Starting Generative PC run: {run_name}")
-    print(f"Structure: Label(10) -> Hidden -> Image(784)")
-    print(f"Device: {device}")
+    print(f"Structure: Label({cfg.layer_dims[0]}) -> Hidden -> Image({cfg.layer_dims[-1]})")
+    print(f"Results will be saved in: {current_run_dir}")
 
     for epoch in range(1, cfg.epochs + 1):
-        # Training (Generative)
         total_sa, total_se = 0.0, 0.0
         
+        # Training (Generative)
         for images, labels in train_loader:
-            # Swap inputs: Label is "x" (Input), Image is "y" (Output)
             stats = run_gen_training_batch(net, to_onehot(labels), to_vec(images), cfg, l_t_spec, y_phase2_spec)
             total_sa += stats.sa_total
             total_se += stats.se_total
 
-        # Inference (Classification) - Clamp Image, Infer Label
-        # Note: GenPC classification is harder/slower than DiscPC.
+        # Inference (Classification)
         test_correct, test_total = 0, 0
-        
         with torch.no_grad():
             for images, labels in test_loader:
                 logits, _ = infer_classification_genpc(net, to_vec(images), cfg, l_t_spec)
@@ -689,17 +627,14 @@ def main(cfg: DiffPCConfig):
                 test_total   += labels.size(0)
 
         test_acc  = 100.0 * test_correct  / test_total
-        
         denom_train = total_neurons * len(train_ds)
         avg_sa = total_sa / denom_train if denom_train > 0 else 0
         avg_se = total_se / denom_train if denom_train > 0 else 0
 
-        print(f"Epoch {epoch:02d}: Test Classification Acc {test_acc:.2f}% | "
-              f"Train Spikes/N: sa={avg_sa:.2f}, se={avg_se:.2f}")
+        print(f"Epoch {epoch:02d}: Test Acc {test_acc:.2f}% | sa={avg_sa:.4f}, se={avg_se:.4f}")
 
-        # Visualize Generation
-        if epoch % 1 == 0:
-            generate_mnist_categories(net, cfg, l_t_spec, device, epoch, log_dir)
+        # Visualize Generation - Pass current_run_dir
+        generate_mnist_categories(net, cfg, l_t_spec, device, epoch, current_run_dir)
 
         run_results.append({
             "epoch": epoch,
@@ -708,30 +643,31 @@ def main(cfg: DiffPCConfig):
             "avg_se": avg_se
         })
 
+    # Save results and config
     with open(log_path, "w") as f:
         json.dump({"config": asdict(cfg), "results": run_results}, f, indent=4)
-    print("Done.")
+    print(f"Experiment finished. Logs saved to {current_run_dir}")
 
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        # Generative Direction: Label -> Hidden -> Image
         layer_dims=[10, 400, 784], 
         lt_m=0,
         lt_n=5,
         lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.1,
-        gamma_every_n=None,
-        t_init_cycles=10, # Give more time for errors to propagate up
+        t_init_cycles=10, 
         phase2_cycles=10,
+        alpha_in = 1.0,
+        alpha_out = 0.001,
         pc_lr=0.0005,
         batch_size=256,
-        epochs=15,
+        epochs=20,
         use_adamw=True,
         adamw_weight_decay=0.01,
         seed=42,
-        run_name="genpc_mnist",
+        run_name="mnist_generate", # ここがディレクトリ名のベースになります
         use_fashion_mnist=False,
         normalize=True,
         device="cuda:0"

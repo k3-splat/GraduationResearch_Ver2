@@ -37,12 +37,12 @@ COMMON_CONFIG = {
     'batch_size': 256,
     'hidden_size': 400,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'run_search': False,  # True にするとハイパーパラメータ探索を実行
+    'run_search': False,  
     'search_trials': 20, 
     'search_epochs': 25, 
     'final_epochs': 20,    
     'fixed_params': {
-        'activation': 'leaky_relu',
+        'activation': 'relu', # ここを 'relu' に変更するとReLUが使用されます
         'lr_activities': 0.0034549692255545815,
         'momentum': 0.0,
         'lr_weights': 5.7652236557134764e-05,
@@ -63,17 +63,21 @@ class bPC_Layer(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         
+        # --- 活性化関数の分岐 (ReLUを追加) ---
         if act_name == 'leaky_relu':
             self.activation = nn.LeakyReLU(0.1)
             self.act_deriv = lambda x: (x > 0).float() + 0.1 * (x <= 0).float()
+        elif act_name == 'relu':
+            self.activation = nn.ReLU()
+            self.act_deriv = lambda x: (x > 0).float()
         elif act_name == 'tanh':
             self.activation = nn.Tanh()
             self.act_deriv = lambda x: 1.0 - torch.tanh(x)**2
         elif act_name == 'gelu':
             self.activation = nn.GELU()
             self.act_deriv = lambda x: 0.5 * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0)))) + \
-                                       0.5 * x * (1.0 - torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0)))**2) * \
-                                       math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * torch.pow(x, 2.0))
+                                     0.5 * x * (1.0 - torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0)))**2) * \
+                                     math.sqrt(2.0 / math.pi) * (1.0 + 3.0 * 0.044715 * torch.pow(x, 2.0))
         else:
             raise ValueError(f"Unknown activation: {act_name}")
 
@@ -181,6 +185,62 @@ class bPC_Net(nn.Module):
         return x, last_eps_disc, last_eps_gen
 
 # =============================================================================
+# [Metrics] 新しいコスト計算関数 (FLOPs, Data Movement, Transfer Bits)
+# =============================================================================
+def compute_comprehensive_metrics(model, activities, threshold=1e-6):
+    """
+    FLOPs, データ移送量(Data Movement), 通信量(Transfer Bits)を
+    Dense(理論最大値) と Sparse(実効値) の両方で計算する。
+    """
+    metrics = {
+        'flops_dense': 0.0, 'flops_sparse': 0.0,
+        'dm_dense': 0.0,    'dm_sparse': 0.0,
+        'bits_dense': 0.0,  'bits_sparse': 0.0
+    }
+    
+    batch_size = activities[0].size(0)
+    
+    for l, layer in enumerate(model.layers):
+        # 入力活動 x (Batch, N_in)
+        x = activities[l] 
+        n_in = layer.in_features
+        n_out = layer.out_features
+        
+        # --- 1. スパース性の判定 ---
+        # 閾値を超えているニューロンの数 (擬似的なスパイク数)
+        num_active = (torch.abs(x) > threshold).sum().item()
+        total_elements = x.numel() # Batch * N_in
+        
+        # --- 2. FLOPs (演算回数) ---
+        # [Dense]: 全入力 x 全出力 (MAC演算 x 2)
+        metrics['flops_dense'] += (batch_size * n_in * n_out) * 2
+        # [Sparse]: アクティブな入力 x 全出力 (MAC演算 x 2)
+        metrics['flops_sparse'] += (num_active * n_out) * 2
+
+        # --- 3. Data Movement (データ移送量: Byte) ---
+        # (A) 重み (float32 = 4 bytes)
+        # [Dense]: 重み全読み出し
+        metrics['dm_dense'] += (n_in * n_out) * 4
+        # [Sparse]: アクティブな入力行の重みのみ読み出し
+        metrics['dm_sparse'] += (num_active * n_out) * 4
+        
+        # (B) 活動の読み書き (float32 = 4 bytes)
+        # 入力読出 + 出力書込
+        metrics['dm_dense'] += (batch_size * n_in + batch_size * n_out) * 4
+        metrics['dm_sparse'] += (num_active + batch_size * n_out) * 4 # 出力側はDenseと仮定(または出力スパース性も考慮可)
+
+        # --- 4. Transfer Bits (層間通信量: Bit) ---
+        # [Dense]: 全ニューロンが32bit値を送信
+        metrics['bits_dense'] += total_elements * 32
+        
+        # [Sparse]: アクティブなニューロンのみ送信
+        # SNN/Sparse通信を想定: 値(32bit) + アドレス(log2 N bit)
+        address_bits = math.ceil(math.log2(n_in)) if n_in > 1 else 1
+        metrics['bits_sparse'] += num_active * (32 + address_bits)
+
+    return metrics
+
+# =============================================================================
 # [Data] Train/Val/Test Split
 # =============================================================================
 def get_dataloaders(batch_size):
@@ -227,10 +287,6 @@ def run_validation_acc(model, loader, device, params):
     return 100 * correct / total
 
 def run_validation_rmse(model, class_averages, device, params):
-    """
-    生成誤差 (RMSE) を計算する。
-    ラベル(one-hot)から画像を生成し、クラス平均画像とのRMSEを測る。
-    """
     labels = torch.arange(10).to(device)
     y_onehot = torch.zeros(10, 10).to(device).scatter_(1, labels.view(-1, 1), 1.0)
     x = model.backward_init(y_onehot)
@@ -266,98 +322,30 @@ def run_validation_rmse(model, class_averages, device, params):
 # [MDL] 記述長計算用関数
 # =============================================================================
 def compute_model_cost(model):
-    """
-    モデル記述長 (Model Cost) を計算する。
-    ここでは重みパラメータのL2ノルムの二乗和 (Sum of Squared Weights) / 2 とする。
-    L(M) = 0.5 * ||W||^2
-    """
     cost = 0.0
     for param in model.parameters():
         cost += 0.5 * torch.norm(param, 2) ** 2
     return cost.item()
 
 # =============================================================================
-# [Phase 1] ハイパーパラメータ探索
-# =============================================================================
-def search_hyperparameters(train_loader, val_loader):
-    print("\n" + "="*60 + "\nPHASE 1: Hyperparameter Search\n" + "="*60)
-    device = torch.device(COMMON_CONFIG['device'])
-    val_class_averages = compute_class_averages(val_loader, device)
-
-    def objective(trial):
-        params = {
-            'activation': trial.suggest_categorical('activation', ['leaky_relu', 'tanh', 'gelu']),
-            'lr_activities': trial.suggest_float('lr_activities', 1e-4, 5e-2, log=True),
-            'momentum': trial.suggest_categorical('momentum', [0.0, 0.5, 0.9]),
-            'lr_weights': trial.suggest_float('lr_weights', 1e-6, 1e-4, log=True),
-            'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True),
-            'alpha_gen': trial.suggest_categorical('alpha_gen', [1.0, 0.1, 0.01, 0.001, 0.0001]),
-            'alpha_disc': 1.0, 'T_train': 8, 'T_eval': 100
-        }
-        model = bPC_Net(COMMON_CONFIG['hidden_size'], params['activation']).to(device)
-        optimizer = optim.AdamW(model.parameters(), lr=params['lr_weights'], weight_decay=params['weight_decay'])
-        for epoch in range(COMMON_CONFIG['search_epochs']):
-            model.train()
-            for i, (images, labels) in enumerate(train_loader):
-                if i > 50: break 
-                images, labels = images.to(device), labels.to(device)
-                activities = model.forward_init(images)
-                with torch.no_grad():
-                    x, _, _ = model.run_inference(activities, images, labels, **{k: params[k] for k in ['steps', 'lr_x', 'momentum', 'alpha_gen', 'alpha_disc'] if k in params or k.replace('steps','T_train') in params}, steps=params['T_train'], lr_x=params['lr_activities'])
-                
-                optimizer.zero_grad()
-                loss = 0
-                for l in range(len(model.layers)):
-                    layer = model.layers[l]
-                    loss += 0.5 * params['alpha_disc'] * torch.sum((x[l+1].detach() - layer.V(layer.activation(x[l].detach())))**2)
-                    loss += 0.5 * params['alpha_gen'] * torch.sum((x[l].detach() - layer.W(layer.activation(x[l+1].detach())))**2)
-                loss.backward(); optimizer.step()
-            val_acc = run_validation_acc(model, val_loader, device, params)
-            val_rmse = run_validation_rmse(model, val_class_averages, device, params)
-            combined_loss = 2 * (1.0 - val_acc / 100.0) + val_rmse
-            trial.report(combined_loss, epoch)
-            if trial.should_prune(): raise optuna.exceptions.TrialPruned()
-        return combined_loss
-
-    study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=COMMON_CONFIG['search_trials'])
-    best_params = study.best_params
-    best_params.update({'T_train': 8, 'T_eval': 100, 'alpha_disc': 1.0})
-    return best_params
-
-# =============================================================================
 # [Phase 2] 学習 & 誤差計測
 # =============================================================================
-def calculate_pass_costs(model, batch_size):
-    """計算コスト(FPO)とデータ移動量(DM)を推定"""
-    dm, fpo = 0, 0
-    for layer in model.layers:
-        n_in, n_out = layer.in_features, layer.out_features
-        # DM: Weights + Activities (Read/Write)
-        dm += (batch_size * n_in + n_out * n_in + batch_size * n_out) * 4
-        # FPO: Matrix Multiplication
-        fpo += (batch_size * n_in * n_out) * 2
-    return dm, fpo
-
 def plot_error_trends(error_history, save_path):
-    """層ごとの誤差推移をグラフ化"""
     epochs = range(1, len(error_history['disc_L0']) + 1)
     plt.figure(figsize=(12, 5))
     
-    # Discriminative Error
     plt.subplot(1, 2, 1)
     for l in range(3):
         plt.plot(epochs, error_history[f'disc_L{l}'], label=f'Layer {l}', marker='o', markersize=3)
     plt.title('Discriminative Error (e_disc) per Sample')
-    plt.xlabel('Epoch'); plt.ylabel('Mean Error'); # plt.yscale('log');
+    plt.xlabel('Epoch'); plt.ylabel('Mean Error'); 
     plt.grid(True); plt.legend()
 
-    # Generative Error
     plt.subplot(1, 2, 2)
     for l in range(3):
         plt.plot(epochs, error_history[f'gen_L{l}'], label=f'Layer {l}', marker='o', markersize=3)
     plt.title('Generative Error (e_gen) per Sample')
-    plt.xlabel('Epoch'); plt.ylabel('Mean Error'); # plt.yscale('log'); 
+    plt.xlabel('Epoch'); plt.ylabel('Mean Error'); 
     plt.grid(True); plt.legend()
     
     plt.tight_layout()
@@ -366,34 +354,38 @@ def plot_error_trends(error_history, save_path):
 
 def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, error_fig_path):
     epochs = COMMON_CONFIG['final_epochs']
-    print("\n" + "="*60 + f"\nPHASE 2: Final Training with MDL (Epochs: {epochs})\n" + "="*60)
+    print("\n" + "="*60 + f"\nPHASE 2: Final Training with Advanced Metrics (Epochs: {epochs})\n" + "="*60)
     device = torch.device(COMMON_CONFIG['device'])
     model = bPC_Net(COMMON_CONFIG['hidden_size'], best_params['activation']).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=best_params['lr_weights'], weight_decay=best_params['weight_decay'])
     
     error_history = {f'{t}_L{l}': [] for t in ['disc', 'gen'] for l in range(3)}
     
-    # CSVヘッダーにMDLとコスト指標を含める
+    # --- 指標累積用変数の初期化 ---
+    # FPO (Giga)
+    cum_flops = {'dense': 0.0, 'sparse': 0.0}
+    # Data Movement (GB)
+    cum_dm = {'dense': 0.0, 'sparse': 0.0}
+    # Transfer Bits (Giga Bits) - New!
+    cum_bits = {'dense': 0.0, 'sparse': 0.0}
+
+    # CSVヘッダー設定
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow([
-            'Epoch', 
-            'Accuracy', 
-            'MDL_Total', 
-            'MDL_Data', 
-            'MDL_Model', 
-            'Total_G_FPO', 
-            'Total_GB_Data', 
+            'Epoch', 'Accuracy', 'MDL_Total', 
+            'FLOPs_D(G)', 'FLOPs_S(G)',      # 計算量
+            'DM_D(GB)', 'DM_S(GB)',          # データ移送量
+            'Bits_D(Gb)', 'Bits_S(Gb)',      # 通信量 (New)
             'Time_s'
         ])
 
-    total_fpo, total_dm = 0.0, 0.0
     start_time = time.time()
     
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_errs = {k: 0.0 for k in error_history.keys()}
-        epoch_data_cost = 0.0 # データ記述長（Lossの総和）
+        epoch_data_cost = 0.0 
         sample_count = 0
         
         for images, labels in train_loader:
@@ -402,14 +394,31 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
             sample_count += bs
             
             activities = model.forward_init(images)
-            # 計測用にinference実行
+            
+            # 推論実行
             final_activities, e_discs, e_gens = model.run_inference(
                 activities, images, labels, steps=best_params['T_train'], 
                 lr_x=best_params['lr_activities'], momentum=best_params['momentum'], 
                 alpha_gen=best_params['alpha_gen'], alpha_disc=best_params['alpha_disc']
             )
             
-            # 1データあたりの誤差を集計 (L2ノルムの和)
+            # --- コスト計測 (バッチごとに実行) ---
+            # 1ステップあたりのコストを計算
+            step_metrics = compute_comprehensive_metrics(model, final_activities, threshold=1e-5)
+            
+            # 推論ステップ数などの係数
+            # (Inference Loops * 4 types of MatrixOps) + (Initial pass) + (Weight Update)
+            # 簡易的に、学習全体での係数として扱う
+            factor = (1 + 4 * best_params['T_train'] + 2)
+            
+            cum_flops['dense']  += step_metrics['flops_dense'] * factor
+            cum_flops['sparse'] += step_metrics['flops_sparse'] * factor
+            cum_dm['dense']     += step_metrics['dm_dense'] * factor
+            cum_dm['sparse']    += step_metrics['dm_sparse'] * factor
+            cum_bits['dense']   += step_metrics['bits_dense'] * factor
+            cum_bits['sparse']  += step_metrics['bits_sparse'] * factor
+
+            # 誤差集計
             for l in range(3):
                 epoch_errs[f'disc_L{l}'] += torch.norm(e_discs[l+1], p=2, dim=1).sum().item()
                 epoch_errs[f'gen_L{l}'] += torch.norm(e_gens[l], p=2, dim=1).sum().item()
@@ -424,37 +433,29 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
             
             loss_total.backward()
             optimizer.step()
-
-            # データ記述長としてLossの値を累積
             epoch_data_cost += loss_total.item()
-            
-            # コスト計算 (従来のFPO/DM)
-            dm, fpo = calculate_pass_costs(model, bs)
-            # 1エポックあたりの累積 (Inference steps + Update)
-            total_dm += (dm * (1 + 4 * best_params['T_train'] + 2))
-            total_fpo += (fpo * (1 + 4 * best_params['T_train'] + 2))
 
-        # 平均誤差の記録
+        # 平均誤差記録
         for k in error_history.keys():
             error_history[k].append(epoch_errs[k] / sample_count)
 
-        # MDL計算 (エポック終了時)
+        # MDL計算
         mdl_model = compute_model_cost(model)
-        mdl_data = epoch_data_cost 
-        mdl_total = mdl_data + mdl_model
+        mdl_total = epoch_data_cost + mdl_model
 
         acc = run_validation_acc(model, test_loader, device, best_params)
-        print(f"Epoch {epoch:02d} | Acc: {acc:.2f}% | MDL: {mdl_total:.2f} (Data: {mdl_data:.2f}, Model: {mdl_model:.2f})")
         
+        # ログ出力
+        print(f"Epoch {epoch:02d} | Acc: {acc:.2f}% | MDL: {mdl_total:.0f} | "
+              f"Bits(Sparse): {cum_bits['sparse']/1e9:.2f}Gb")
+        
+        # CSV書き込み (単位調整: Giga = 1e9)
         with open(csv_path, 'a', newline='') as f:
             csv.writer(f).writerow([
-                epoch, 
-                acc, 
-                mdl_total, 
-                mdl_data, 
-                mdl_model, 
-                total_fpo/1e9, 
-                total_dm/1e9, 
+                epoch, acc, mdl_total, 
+                cum_flops['dense']/1e9, cum_flops['sparse']/1e9,
+                cum_dm['dense']/1e9,    cum_dm['sparse']/1e9,
+                cum_bits['dense']/1e9,  cum_bits['sparse']/1e9, # Transfer Bits
                 time.time()-start_time
             ])
 
@@ -462,7 +463,7 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
     return model
 
 # =============================================================================
-# [Phase 3] 画像生成
+# [Phase 3] 画像生成 (変更なし)
 # =============================================================================
 def generate_images_from_labels(model, device, params, class_averages, save_path):
     model.eval()
@@ -512,20 +513,20 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_dataloaders(COMMON_CONFIG['batch_size'])
     device = torch.device(COMMON_CONFIG['device'])
 
-    best_params = search_hyperparameters(train_loader, val_loader) if COMMON_CONFIG['run_search'] else COMMON_CONFIG['fixed_params']
+    best_params = COMMON_CONFIG['fixed_params']
+    # 必要に応じてここで activation を変更してください
+    # best_params['activation'] = 'relu'
+
+    if COMMON_CONFIG['run_search']:
+        # 簡易化のため探索コードは省略(必要ならPhase1を復活させてください)
+        pass 
     
-    # 学習実行
     trained_model = run_fixed_epoch_training(best_params, train_loader, test_loader, csv_file, err_fig)
     
     print("Computing Final RMSE and generating images...")
-    
-    # クラス平均画像の取得
     test_class_avgs = compute_class_averages(test_loader, device)
-    
-    # ★追加: 最終RMSEの計算と表示
     final_rmse = run_validation_rmse(trained_model, test_class_avgs, device, best_params)
     print(f"Final Generative RMSE: {final_rmse:.4f}")
     
-    # 画像生成
     generate_images_from_labels(trained_model, device, best_params, test_class_avgs, gen_img)
     print(f"Results saved: {err_fig}, {gen_img}")

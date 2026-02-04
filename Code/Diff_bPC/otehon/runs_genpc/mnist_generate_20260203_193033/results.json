@@ -1,0 +1,99 @@
+{
+    "config": {
+        "layer_dims": [
+            10,
+            400,
+            784
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.1,
+        "gamma_every_n": null,
+        "t_init_cycles": 10,
+        "phase2_cycles": 10,
+        "pc_lr": 0.0005,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 42,
+        "run_name": "mnist_generate",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.0,
+        "v1_dropout": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "test_acc": 9.8,
+            "avg_sa": 0.9942061655405405,
+            "avg_se": 6.4824932150900905
+        },
+        {
+            "epoch": 2,
+            "test_acc": 9.8,
+            "avg_sa": 1.430803786599099,
+            "avg_se": 7.188888457207208
+        },
+        {
+            "epoch": 3,
+            "test_acc": 9.8,
+            "avg_sa": 1.7155150056306305,
+            "avg_se": 7.32908795045045
+        },
+        {
+            "epoch": 4,
+            "test_acc": 9.8,
+            "avg_sa": 1.8721060247747747,
+            "avg_se": 7.35654527027027
+        },
+        {
+            "epoch": 5,
+            "test_acc": 9.8,
+            "avg_sa": 1.9663931587837837,
+            "avg_se": 7.531729940878378
+        },
+        {
+            "epoch": 6,
+            "test_acc": 9.8,
+            "avg_sa": 2.112356813063063,
+            "avg_se": 9.558876759572073
+        },
+        {
+            "epoch": 7,
+            "test_acc": 9.8,
+            "avg_sa": 1.771424535472973,
+            "avg_se": 10.08837742117117
+        },
+        {
+            "epoch": 8,
+            "test_acc": 9.8,
+            "avg_sa": 1.0561122606981983,
+            "avg_se": 11.180776886261262
+        },
+        {
+            "epoch": 9,
+            "test_acc": 9.8,
+            "avg_sa": 0.6724303350225225,
+            "avg_se": 10.135963091216217
+        },
+        {
+            "epoch": 10,
+            "test_acc": 9.8,
+            "avg_sa": 0.4987995073198198,
+            "avg_se": 9.40506402027027
+        }
+    ]
+}

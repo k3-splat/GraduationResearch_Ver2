@@ -412,10 +412,10 @@ class DiffPCNetworkTorch(nn.Module):
             post_eT_disc = lyr.e_T_disc
             post_eT_gen = self.input_driver.e_T_gen if l == 0 else self.layers[l-1].e_T_gen
 
-            self.W[l].grad = - (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
-            self.W_bias[l].grad = - post_eT_disc.sum(dim=0, keepdim=True).T / Bf
-            self.V[l].grad = - (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
-            self.V_bias[l].grad = - post_eT_gen.sum(dim=0, keepdim=True).T / Bf
+            self.W[l].grad = - cfg.alpha_disc * (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
+            self.W_bias[l].grad = - cfg.alpha_disc * post_eT_disc.sum(dim=0, keepdim=True).T / Bf
+            self.V[l].grad = - cfg.alpha_gen * (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
+            self.V_bias[l].grad = - cfg.alpha_gen * post_eT_gen.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias) + list(self.V) + list(self.V_bias), self.cfg.clip_grad_norm)
@@ -517,6 +517,18 @@ def infer_batch_backward_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, c
 
     net.set_training(False)                 # v2: no dropout in inference
 
+    # --- Set alpha_gen to 1.0 for generation ---
+    original_alphas = []
+    # Handle Input Driver
+    original_alphas.append(net.input_driver.alpha_gen)
+    net.input_driver.alpha_gen = 1.0
+    # Handle Hidden/Output Layers
+    for lyr in net.layers:
+        original_alphas.append(lyr.alpha_gen)
+        lyr.alpha_gen = 1.0
+    # ------------------------------------------
+
+
     net.set_clamp(len(net.layers), True, y_onehot)
     for li in range(0, len(net.layers)): net.set_clamp(li, False)
     
@@ -527,6 +539,12 @@ def infer_batch_backward_only(net: DiffPCNetworkTorch, y_onehot: torch.Tensor, c
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
+
+    # --- Restore alpha_gen ---
+    net.input_driver.alpha_gen = original_alphas[0]
+    for i, lyr in enumerate(net.layers):
+        lyr.alpha_gen = original_alphas[i+1]
+    # -------------------------
             
     return net.input_driver.x_T.clone(), spike_stats
 
@@ -769,18 +787,18 @@ if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
         lt_m=0,
-        lt_n=6,
+        lt_n=5,
         lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
         gamma_every_n=None,
-        t_init_cycles=15,
-        phase2_cycles=15,
+        t_init_cycles=20,
+        phase2_cycles=20,
         alpha_disc = 1,
-        alpha_gen = 0.01,
-        s_A_threshold = 2,
+        alpha_gen = 0.0001,
+        s_A_threshold = 1,
         s_e_disc_threshold = 1,
-        s_e_gen_threshold = 16,
+        s_e_gen_threshold = 1,
         pc_lr=0.0001,
         batch_size=256,
         epochs=10,
