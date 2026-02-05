@@ -424,8 +424,8 @@ class DiffPCNetworkTorch(nn.Module):
 
             self.W[l].grad = - self.cfg.alpha_disc * (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
             self.W_bias[l].grad = - self.cfg.alpha_disc * post_eT_disc.sum(dim=0, keepdim=True).T / Bf
-            self.V[l].grad = - (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
-            self.V_bias[l].grad = - post_eT_gen.sum(dim=0, keepdim=True).T / Bf
+            self.V[l].grad = - self.cfg.alpha_gen * (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
+            self.V_bias[l].grad = - self.cfg.alpha_gen * post_eT_gen.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias) + list(self.V) + list(self.V_bias), self.cfg.clip_grad_norm)
@@ -545,7 +545,6 @@ def infer_batch_backward_phase2(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
     for li in range(len(net.layers)): net.set_clamp(li, False)
     for _ in range(steps_phase1): net.one_time_step(bottomup_mask=True, topdown_mask=False)
 
-    '''
     y_phase2 = get_y_scheduler(y_phase2_spec["type"], {**y_phase2_spec["args"], "l_t_scheduler": l_t_sched})
     l_t_sched.begin_phase(phase_start_step=steps_phase1, phase_len=steps_phase2, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase2)
@@ -557,7 +556,6 @@ def infer_batch_backward_phase2(net: DiffPCNetworkTorch, y_onehot: torch.Tensor,
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_disc_total += (lyr.s_e_disc != 0).sum().item()
             spike_stats.se_gen_total += (lyr.s_e_gen != 0).sum().item()
-    '''
 
     net.input_driver.alpha_gen = original_alphas[0]
     for i, lyr in enumerate(net.layers):
@@ -743,7 +741,7 @@ def main(cfg: DiffPCConfig):
 if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
-        lt_m=-2,
+        lt_m=-4,
         lt_n=6,
         lt_a=1.0,
         lt_min_a=0.0,
@@ -754,10 +752,10 @@ if __name__ == "__main__":
         t_init_cycles=20,
         phase2_cycles=20,
         alpha_disc = 1.0,
-        alpha_gen = 0.01,
+        alpha_gen = 0.005,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=20,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
         adamw_eps=1e-08,

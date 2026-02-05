@@ -48,6 +48,8 @@ class DiffPCConfig:
 class SpikeStats:
     sa_total: float = 0.0
     se_total: float = 0.0
+    # New: Ratio of neurons with negative activity (x_T < 0) in hidden layers
+    neg_activity_ratio: float = 0.0
 
 # =========================
 #  Schedulers + factories
@@ -385,8 +387,8 @@ class DiffPCNetworkTorch(nn.Module):
                 if self._v1_drop_masks[l] is not None:
                     post_eT = post_eT * self._v1_drop_masks[l]
 
-            self.W[l].grad = - (post_eT.T @ torch.relu(pre_xT)) / Bf
-            self.W_bias[l].grad = - cfg.alpha_out * post_eT.sum(dim=0, keepdim=True).T / Bf
+            self.W[l].grad = - self.cfg.alpha_out * (post_eT.T @ torch.relu(pre_xT)) / Bf
+            self.W_bias[l].grad = - self.cfg.alpha_out * post_eT.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias), self.cfg.clip_grad_norm)
@@ -441,6 +443,21 @@ def run_gen_training_batch(net: DiffPCNetworkTorch, label_onehot: torch.Tensor, 
         for lyr in net.layers:
             spike_stats.sa_total += (lyr.s_A != 0).sum().item()
             spike_stats.se_total += (lyr.s_e != 0).sum().item()
+            
+    # --- Check Negative Activity Ratio in Hidden Layers ---
+    # Hidden layers are net.layers[:-1] (since index 0 is unclamped hidden, and last is image)
+    # Note: net.layers contains [Hidden1, ..., HiddenK, Image].
+    # Clamping: L0(Driver)=Label, L_Last=Image. 
+    # Intermediate layers (Hidden) are in net.layers[:-1].
+    total_hidden = 0
+    total_neg = 0
+    for lyr in net.layers[:-1]:
+        total_neg += (lyr.x_T < 0).sum().item()
+        total_hidden += lyr.x_T.numel()
+    
+    if total_hidden > 0:
+        spike_stats.neg_activity_ratio = total_neg / total_hidden
+    # ---------------------------------------------------
     
     net.apply_phase2_update()
     return spike_stats
@@ -610,12 +627,16 @@ def main(cfg: DiffPCConfig):
 
     for epoch in range(1, cfg.epochs + 1):
         total_sa, total_se = 0.0, 0.0
+        total_neg_ratio_accum = 0.0
+        num_batches = 0
         
         # Training (Generative)
         for images, labels in train_loader:
             stats = run_gen_training_batch(net, to_onehot(labels), to_vec(images), cfg, l_t_spec, y_phase2_spec)
             total_sa += stats.sa_total
             total_se += stats.se_total
+            total_neg_ratio_accum += stats.neg_activity_ratio
+            num_batches += 1
 
         # Inference (Classification)
         test_correct, test_total = 0, 0
@@ -630,8 +651,9 @@ def main(cfg: DiffPCConfig):
         denom_train = total_neurons * len(train_ds)
         avg_sa = total_sa / denom_train if denom_train > 0 else 0
         avg_se = total_se / denom_train if denom_train > 0 else 0
+        avg_neg_ratio = total_neg_ratio_accum / num_batches if num_batches > 0 else 0
 
-        print(f"Epoch {epoch:02d}: Test Acc {test_acc:.2f}% | sa={avg_sa:.4f}, se={avg_se:.4f}")
+        print(f"Epoch {epoch:02d}: Test Acc {test_acc:.2f}% | NegRatio={avg_neg_ratio:.2%} | sa={avg_sa:.4f}, se={avg_se:.4f}")
 
         # Visualize Generation - Pass current_run_dir
         generate_mnist_categories(net, cfg, l_t_spec, device, epoch, current_run_dir)
@@ -640,7 +662,8 @@ def main(cfg: DiffPCConfig):
             "epoch": epoch,
             "test_acc": test_acc,
             "avg_sa": avg_sa,
-            "avg_se": avg_se
+            "avg_se": avg_se,
+            "avg_neg_activity_ratio": avg_neg_ratio
         })
 
     # Save results and config
@@ -651,7 +674,7 @@ def main(cfg: DiffPCConfig):
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        layer_dims=[10, 400, 784], 
+        layer_dims=[10, 256, 256, 784], 
         lt_m=0,
         lt_n=5,
         lt_a=1.0,
@@ -660,14 +683,14 @@ if __name__ == "__main__":
         t_init_cycles=10, 
         phase2_cycles=10,
         alpha_in = 1.0,
-        alpha_out = 0.001,
+        alpha_out = 1.0,
         pc_lr=0.0005,
         batch_size=256,
         epochs=20,
         use_adamw=True,
         adamw_weight_decay=0.01,
         seed=42,
-        run_name="mnist_generate", # ここがディレクトリ名のベースになります
+        run_name="mnist_generate_neg_monitor", 
         use_fashion_mnist=False,
         normalize=True,
         device="cuda:0"

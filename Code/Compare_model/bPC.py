@@ -91,7 +91,7 @@ class bPC_Net(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([
             bPC_Layer(784, hidden_size, act_name),
-            bPC_Layer(hidden_size, hidden_size, act_name),
+            # bPC_Layer(hidden_size, hidden_size, act_name),
             bPC_Layer(hidden_size, 10, act_name)
         ])
         
@@ -375,7 +375,7 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
             )
             
             # 1データあたりの誤差を集計 (L2ノルムの和)
-            for l in range(3):
+            for l in range(2):
                 epoch_errs[f'disc_L{l}'] += torch.norm(e_discs[l+1], p=2, dim=1).sum().item()
                 epoch_errs[f'gen_L{l}'] += torch.norm(e_gens[l], p=2, dim=1).sum().item()
 

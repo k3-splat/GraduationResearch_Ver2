@@ -751,7 +751,7 @@ if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
         lt_m=0,
-        lt_n=5,
+        lt_n=8,
         lt_a=1.0,
         lt_min_a=0.0,
         lt_min_e_disc=0.0,
@@ -764,7 +764,7 @@ if __name__ == "__main__":
         alpha_gen = 0.01,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=20,
         seed=2,
         run_name="under_alpha",
         dropout_rate=0.5,
