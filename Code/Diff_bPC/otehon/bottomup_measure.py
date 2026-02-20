@@ -583,14 +583,20 @@ def main(cfg: DiffPCConfig):
     def to_onehot(y: torch.Tensor) -> torch.Tensor: return F.one_hot(y, num_classes=cfg.layer_dims[-1]).float().to(device)
 
     run_results = []
-    # History for plots
+    
+    # History for plots (batch-wise tracking)
     h_flops = {'dense': [], 'sparse': []}
     h_dm = {'dense': [], 'sparse': []}
     h_bits = {'dense': [], 'sparse': []}
     h_neg_ratio = []
 
+    # --- [変更点1] 累計カウンタの初期化 ---
+    # 学習開始からの総コストを保持する変数
+    cumulative_stats = SpikeStats() 
+    # -----------------------------------
+
     for epoch in range(1, cfg.epochs + 1):
-        ep_stats = SpikeStats()
+        ep_stats = SpikeStats() # そのエポック単体のコスト
         num_batches = 0
         total_neg_ratio_accum = 0.0
 
@@ -598,7 +604,7 @@ def main(cfg: DiffPCConfig):
         for images, labels in train_loader:
             _, stats = run_batch_two_phase(net, to_vec(images), to_onehot(labels), cfg, l_t_spec, y_phase2_spec)
             
-            # Aggregate Costs
+            # Aggregate Costs for Epoch
             ep_stats.flops_dense += stats.flops_dense
             ep_stats.flops_sparse += stats.flops_sparse
             ep_stats.dm_dense += stats.dm_dense
@@ -611,11 +617,20 @@ def main(cfg: DiffPCConfig):
             
             num_batches += 1
 
-            # Append batch stats for plotting
+            # Append batch stats for plotting (Tracking per batch is kept as average for visualization if needed, or raw)
             h_flops['dense'].append(stats.flops_dense/1e9); h_flops['sparse'].append(stats.flops_sparse/1e9)
             h_dm['dense'].append(stats.dm_dense/(1024**2)); h_dm['sparse'].append(stats.dm_sparse/(1024**2))
             h_bits['dense'].append(stats.bits_dense/1e9); h_bits['sparse'].append(stats.bits_sparse/1e9)
             h_neg_ratio.append(stats.neg_activity_ratio)
+
+        # --- [変更点2] 累計カウンタの更新 ---
+        cumulative_stats.flops_dense += ep_stats.flops_dense
+        cumulative_stats.flops_sparse += ep_stats.flops_sparse
+        cumulative_stats.dm_dense += ep_stats.dm_dense
+        cumulative_stats.dm_sparse += ep_stats.dm_sparse
+        cumulative_stats.bits_dense += ep_stats.bits_dense
+        cumulative_stats.bits_sparse += ep_stats.bits_sparse
+        # -----------------------------------
 
         # Eval Loop
         train_correct, train_total = 0, 0
@@ -632,27 +647,41 @@ def main(cfg: DiffPCConfig):
         test_acc  = 100.0 * test_correct  / test_total
         avg_neg_ratio = total_neg_ratio_accum / num_batches
 
-        # Avg costs per batch
-        avg_flops_d_g = (ep_stats.flops_dense / num_batches) / 1e9
-        avg_flops_s_g = (ep_stats.flops_sparse / num_batches) / 1e9
-        avg_dm_d_mb   = (ep_stats.dm_dense / num_batches) / (1024**2)
-        avg_dm_s_mb   = (ep_stats.dm_sparse / num_batches) / (1024**2)
-        avg_bits_d_gb = (ep_stats.bits_dense / num_batches) / 1e9
-        avg_bits_s_gb = (ep_stats.bits_sparse / num_batches) / 1e9
+        # --- [変更点3] 表示用・記録用の変数を「累計値」に変換 ---
+        # 単位変換: Giga, MegaByte, GigaBit
+        cum_flops_d_g = cumulative_stats.flops_dense / 1e9
+        cum_flops_s_g = cumulative_stats.flops_sparse / 1e9
+        
+        cum_dm_d_mb   = cumulative_stats.dm_dense / (1024**2)
+        cum_dm_s_mb   = cumulative_stats.dm_sparse / (1024**2)
+        
+        cum_bits_d_gb = cumulative_stats.bits_dense / 1e9
+        cum_bits_s_gb = cumulative_stats.bits_sparse / 1e9
 
         print(
             f"Epoch {epoch:02d}: Tr {train_acc:.1f}% / Te {test_acc:.1f}% | "
             f"NegRatio: {avg_neg_ratio:.2%} | "
-            f"FLOPs(G): {avg_flops_s_g:.1f} | DM(MB): {avg_dm_s_mb:.1f} | Bits(Gb): {avg_bits_s_gb:.1f}"
+            f"Cum FLOPs(G): {cum_flops_s_g:.1f} | Cum DM(MB): {cum_dm_s_mb:.1f} | Cum Bits(Gb): {cum_bits_s_gb:.1f}"
         )
 
         visualize_generated_digits(net, cfg, l_t_spec, epoch, current_run_dir)
 
+        # --- [変更点4] JSON保存データにDenseと累計値を追加 ---
         run_results.append({
-            "epoch": epoch, "train_acc": train_acc, "test_acc": test_acc,
+            "epoch": epoch, 
+            "train_acc": train_acc, 
+            "test_acc": test_acc,
             "avg_neg_activity_ratio": avg_neg_ratio,
-            "avg_flops_sparse_G": avg_flops_s_g, "avg_dm_sparse_MB": avg_dm_s_mb,
-            "avg_bits_sparse_Gb": avg_bits_s_gb
+            
+            # 累計コスト (Cumulative Costs)
+            "cum_flops_dense_G": cum_flops_d_g,
+            "cum_flops_sparse_G": cum_flops_s_g,
+            
+            "cum_dm_dense_MB": cum_dm_d_mb,
+            "cum_dm_sparse_MB": cum_dm_s_mb,
+            
+            "cum_bits_dense_Gb": cum_bits_d_gb,
+            "cum_bits_sparse_Gb": cum_bits_s_gb
         })
 
     # Save Results
@@ -662,7 +691,7 @@ def main(cfg: DiffPCConfig):
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        layer_dims=[784, 256, 10],
+        layer_dims=[784, 400, 10],
         lt_m=0, lt_n=5, lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
