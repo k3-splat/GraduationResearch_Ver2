@@ -906,11 +906,11 @@ if __name__ == "__main__":
         adamw_eps=1e-08,
         clip_grad_norm=1.0,
         seed=2,
-        run_name="mnist_400h_last",
+        run_name="mnist_2026_02_23_part2",
         use_fashion_mnist=False,
         dropout_rate=0.5,
         v1_dropout=False,
-        random_crop_padding=2,
+        random_crop_padding=0,
         normalize=True,
         fmnist_hflip_p=0.0,
         device="cuda:0"
