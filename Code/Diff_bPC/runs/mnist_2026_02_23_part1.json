@@ -1,0 +1,172 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": -4,
+        "lt_n": 6,
+        "lt_a": 1.0,
+        "lt_min_a": 0.0625,
+        "lt_min_e_disc": 0.0625,
+        "lt_min_e_gen": 0.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 20,
+        "phase2_cycles": 30,
+        "alpha_disc": 1,
+        "alpha_gen": 0.001,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 20,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 42,
+        "run_name": "mnist_2026_02_23_part1",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 79.395,
+            "test_acc": 79.89,
+            "gen_rmse": 0.5509052276611328
+        },
+        {
+            "epoch": 2,
+            "train_acc": 82.1,
+            "test_acc": 82.72,
+            "gen_rmse": 0.4344460666179657
+        },
+        {
+            "epoch": 3,
+            "train_acc": 83.32333333333334,
+            "test_acc": 83.55,
+            "gen_rmse": 0.44257494807243347
+        },
+        {
+            "epoch": 4,
+            "train_acc": 84.17666666666666,
+            "test_acc": 84.46,
+            "gen_rmse": 0.5868425369262695
+        },
+        {
+            "epoch": 5,
+            "train_acc": 85.07,
+            "test_acc": 85.59,
+            "gen_rmse": 0.6775382161140442
+        },
+        {
+            "epoch": 6,
+            "train_acc": 88.60166666666667,
+            "test_acc": 89.41,
+            "gen_rmse": 0.7738035321235657
+        },
+        {
+            "epoch": 7,
+            "train_acc": 90.69,
+            "test_acc": 91.09,
+            "gen_rmse": 0.8646999597549438
+        },
+        {
+            "epoch": 8,
+            "train_acc": 92.18166666666667,
+            "test_acc": 92.47,
+            "gen_rmse": 0.9348627328872681
+        },
+        {
+            "epoch": 9,
+            "train_acc": 92.51333333333334,
+            "test_acc": 92.74,
+            "gen_rmse": 1.0280025005340576
+        },
+        {
+            "epoch": 10,
+            "train_acc": 92.85833333333333,
+            "test_acc": 92.83,
+            "gen_rmse": 1.0859979391098022
+        },
+        {
+            "epoch": 11,
+            "train_acc": 92.99333333333334,
+            "test_acc": 93.1,
+            "gen_rmse": 1.1176365613937378
+        },
+        {
+            "epoch": 12,
+            "train_acc": 93.17833333333333,
+            "test_acc": 93.37,
+            "gen_rmse": 1.0933634042739868
+        },
+        {
+            "epoch": 13,
+            "train_acc": 93.57833333333333,
+            "test_acc": 93.41,
+            "gen_rmse": 1.0593206882476807
+        },
+        {
+            "epoch": 14,
+            "train_acc": 93.63833333333334,
+            "test_acc": 93.42,
+            "gen_rmse": 1.009224772453308
+        },
+        {
+            "epoch": 15,
+            "train_acc": 93.89,
+            "test_acc": 93.47,
+            "gen_rmse": 0.990887463092804
+        },
+        {
+            "epoch": 16,
+            "train_acc": 94.04166666666667,
+            "test_acc": 93.4,
+            "gen_rmse": 0.9365023970603943
+        },
+        {
+            "epoch": 17,
+            "train_acc": 94.16833333333334,
+            "test_acc": 93.52,
+            "gen_rmse": 0.8558355569839478
+        },
+        {
+            "epoch": 18,
+            "train_acc": 94.325,
+            "test_acc": 93.73,
+            "gen_rmse": 0.7743381857872009
+        },
+        {
+            "epoch": 19,
+            "train_acc": 94.46666666666667,
+            "test_acc": 93.76,
+            "gen_rmse": 0.7208966612815857
+        },
+        {
+            "epoch": 20,
+            "train_acc": 94.62,
+            "test_acc": 93.84,
+            "gen_rmse": 0.7189859747886658
+        }
+    ],
+    "total_costs": {
+        "dense_flops": 548812800000000.0,
+        "sparse_flops": 39919049572572.0,
+        "dense_data_transfer": 9807897600000.0,
+        "sparse_data_transfer": 82927598668524.0,
+        "dense_comm": 2754432000000.0,
+        "sparse_comm": 435390941307.75
+    }
+}

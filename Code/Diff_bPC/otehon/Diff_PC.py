@@ -211,7 +211,7 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_data.add_(e_in_recv.to(self.device) * l_t_integration)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.alpha_disc * self.e_T + (self.x_T > 0).float() * self.alpha_disc * self.e_in_data))
+            self.x_T.add_(self.y * (-self.e_T + (self.x_T > 0).float() * self.e_in_data))
         
         # Spiking (Forward)
         eff_lt_a = max(l_t_cur, self.lt_min_a)
@@ -262,8 +262,6 @@ class DiffPCNetworkTorch(nn.Module):
         layer_args = {
             "sampling_duration": 1, "learning_weights": True, "training": True,
             "l_t_scheduler": l_t_sched, "y_scheduler": y_sched, "device": self.device,
-            "lt_min_a": cfg.lt_min_a, "lt_min_e_disc": cfg.lt_min_e_disc, "lt_min_e_gen": cfg.lt_min_e_gen,
-            "alpha_disc": cfg.alpha_disc # Using alpha_disc for scaling updates if needed
         }
         self.layers = nn.ModuleList([DiffPCLayerTorch(dim=d, **layer_args) for d in cfg.layer_dims[1:]])
         self.input_driver = DiffPCLayerTorch(dim=cfg.layer_dims[0], **layer_args)
@@ -694,7 +692,7 @@ def main(cfg: DiffPCConfig):
             f"Cum FLOPs(G): {cum_flops_s_g:.1f} | Cum DM(MB): {cum_dm_s_mb:.1f} | Cum Bits(Gb): {cum_bits_s_gb:.1f}"
         )
 
-        visualize_generated_digits(net, cfg, l_t_spec, epoch, current_run_dir)
+        # visualize_generated_digits(net, cfg, l_t_spec, epoch, current_run_dir)
 
         # --- [変更点4] JSON保存データにDenseと累計値を追加 ---
         run_results.append({
@@ -732,14 +730,14 @@ if __name__ == "__main__":
         phase2_cycles=15,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=20,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
         adamw_eps=1e-08,
         clip_grad_norm=1.0,
         seed=2,
-        run_name="ex_cyclic_phase",
+        run_name="Diff_PC_2026_02_23",
         use_fashion_mnist=False,
         dropout_rate=0.5,
         v1_dropout=False,
