@@ -1,3 +1,39 @@
+"""
+=============================================================================
+Differentiable/Spiking Predictive Coding (DiffPC) - Training & Cost Measurement
+=============================================================================
+
+【このプログラムを実行すると何ができるか】
+このスクリプトは，提案手法であるDiffPCを用いて，MNISTデータセットの学習を行うプログラムである．
+
+特に，推論・学習時の「ハードウェア実装コスト」を，通常の密行列計算（Dense）と，
+発火の疎性（スパース性）を活かした疎行列計算（Sparse）の両面から計測・比較できる点が特徴となっている．
+
+プログラムを実行すると，以下のプロセスが順に実行される．
+
+1. DiffPCモデルの学習と評価（Two-Phase 推論）
+   - フェーズ1（入力からの推論）とフェーズ2（正解ラベルをクランプした状態での誤差逆伝播）の
+     2段階プロセスでネットワークの重みを更新する．
+   - エポックごとに学習データとテストデータの分類精度（Accuracy）を計測する．
+
+2. 計算コストとネットワーク状態のトラッキング（累計計測）
+   - バッチごとに以下のハードウェア指標をDense / Sparseの両面から計算し，累計値を記録する．
+     * FLOPs (G) : 浮動小数点演算数
+     * Data Movement (MB) : メモリ間のデータ移動量
+     * Communication (Gb) : レイヤー間の通信ビット数
+   - また，隠れ層における「負のアクティビティ（電位が0未満の割合）」を監視．
+
+3. クラスラベルからの画像生成（トップダウン生成）
+   - エポックごとに，ネットワークの出力層に「0〜9」の正解ラベルを直接与えて
+     逆方向に推論（トップダウン生成）を行い，学習の進捗を視覚的に確認できる画像を生成する．
+
+【出力されるファイル（runs/[run_name]_[日時]/ ディレクトリ内）】
+- results.json      : 設定（config）内容や，各エポックの精度・累積コストなどを保存したデータ
+- metrics_plot.png  : コスト（FLOPs，データ移動量，通信量）および負のアクティビティ割合の推移グラフ
+- gen_epoch_XXX.png : 各エポック（XXX）でモデルがラベルから生成した0〜9の手書き数字画像
+=============================================================================
+"""
+
 import math
 import os
 import json
@@ -22,17 +58,11 @@ import matplotlib.pyplot as plt
 class DiffPCConfig:
     """Central configuration for the DiffPC model and training."""
     layer_dims: list[int] = (784, 200, 10)
-    lt_m: int = 3; lt_n: int = 4; lt_a: float = 0.5
-    
-    # Threshold minimums
-    lt_min_a: float = 0.0       
-    lt_min_e_disc: float = 0.0  
-    lt_min_e_gen: float = 0.0   
+    lt_m: int = 3; lt_n: int = 4; lt_a: float = 0.5  
 
     lt_scheduler_type: str = "cyclic_phase"
     gamma_value: float = 0.2; gamma_every_n: Optional[int] = None
     t_init_cycles: int = 15; phase2_cycles: int = 15
-    alpha_disc: float = 1.0; alpha_gen: float = 0.01
     pc_lr: float = 5e-4
     batch_size: int = 256; epochs: int = 125
     use_adamw: bool = True
@@ -692,13 +722,30 @@ def main(cfg: DiffPCConfig):
 if __name__ == "__main__":
     cfg = DiffPCConfig(
         layer_dims=[784, 400, 10],
-        lt_m=0, lt_n=5, lt_a=1.0,
+        lt_m=0,
+        lt_n=5,
+        lt_a=1.0,
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
-        t_init_cycles=15, phase2_cycles=15,
-        pc_lr=0.0001, batch_size=256, epochs=20,
-        seed=2, run_name="mnist_400h_neg_monitor",
-        dropout_rate=0.5, normalize=True,
-        device="cuda:0"
+        gamma_every_n=None,
+        t_init_cycles=15,
+        phase2_cycles=15,
+        pc_lr=0.0001,
+        batch_size=256,
+        epochs=10,
+        use_adamw=True,
+        adamw_weight_decay=0.01,
+        adamw_betas=(0.9, 0.999),
+        adamw_eps=1e-08,
+        clip_grad_norm=1.0,
+        seed=2,
+        run_name="ex_cyclic_phase",
+        use_fashion_mnist=False,
+        dropout_rate=0.5,
+        v1_dropout=False,
+        random_crop_padding=2,
+        normalize=True,
+        fmnist_hflip_p=0.0,
+        device="cuda:0" # Adjust device ID if necessary
     )
     main(cfg)

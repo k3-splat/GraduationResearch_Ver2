@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.getcwd())
 
 try:
-    import bottomup_measure as bu
+    import Code.Diff_bPC.otehon.Diff_PC as bu
     import topdown_prediction as td
 except ImportError:
     print("エラー: 'bottomup_measure.py' または 'topdown_prediction.py' が見つかりません。")
