@@ -378,27 +378,14 @@ class DiffPCNetworkTorch(nn.Module):
         if layer_index == 0: self.input_driver_clamp, self.input_driver_data = clamp, data
         else: self._clamp_switch[layer_index-1], self._data_bucket[layer_index-1] = clamp, data
 
+    @torch.no_grad()
     def _accumulate_mm_costs(self, x: torch.Tensor, weight_matrix: torch.Tensor):
         """
         Calculates and accumulates costs for a Matrix Multiplication: Y = X @ W.T
-        Note: The pytorch operations in the code are generally `x @ W.T` or `x @ W`.
-        This function handles the abstract "Input x connecting to Output via Weight".
-        
-        Args:
-            x: Input tensor (Batch, In_Features)
-            weight_matrix: The weight tensor being multiplied.
-                           If operation is `x @ W.T` (Linear), weight_matrix is W (Out, In).
-                           If operation is `x @ W` (Backward), weight_matrix is W (In, Out).
-                           We use the shape to determine FLOPs.
         """
         if not self.measure_costs: return
 
         # Dimensions
-        # Assume x: (B, N_in)
-        # We need N_out. 
-        # If standard Linear (x @ W.T), W is (N_out, N_in).
-        # If Backward (e @ W), W is (N_in, N_out).
-        # To be precise, let's just use the dimension of W that matches x.shape[1] to find the other.
         B, N_in = x.shape
         w_shape = weight_matrix.shape
         if w_shape[1] == N_in:
@@ -406,39 +393,33 @@ class DiffPCNetworkTorch(nn.Module):
         elif w_shape[0] == N_in:
              N_out = w_shape[1] # Transposed usage
         else:
-             # Just a fallback for safety, though typical NN weights are (Out, In)
              N_out = w_shape[0] 
 
         # 1. FLOPs (MACs * 2)
-        # Dense: B * N_in * N_out * 2
         d_flops = B * N_in * N_out * 2
         
-        # Sparse: nnz * N_out * 2
-        # Counting non-zeros in input batch x
         nnz = torch.count_nonzero(x).item()
         s_flops = nnz * N_out * 2
         
         # 2. Data Transfer (Bytes, float32=4B)
-        # Dense: Read W (entire) + Read x (entire) + Write y (entire)
-        # We assume W is read once per batch step (or fully reused if small, but let's count reuse as 1)
         w_size_bytes = weight_matrix.numel() * 4
         x_size_bytes = x.numel() * 4
         y_size_bytes = B * N_out * 4
         d_mem = w_size_bytes + x_size_bytes + y_size_bytes
         
-        # Sparse: 
-        # Read W: We only fetch rows of W corresponding to non-zero inputs.
-        # Approx: (nnz / B) * N_out * 4 if inputs were distinct, but actually it's total nnz lookups.
-        # To represent "sparse access", we assume we read a row of W for every spike.
-        # This is nnz * N_out * 4.
-        # Read x: Sparse format (val+idx). 8 bytes per nnz.
-        # Write y: Dense output.
-        s_mem = (nnz * N_out * 4) + (nnz * 8) + y_size_bytes
+        # [修正] tanomu.py (Original): s_mem = (nnz * N_out * 4) + (nnz * 8) + y_size_bytes
+        # [修正] bottomup一致版: Input読み込みをValueのみ(4B)とする
+        s_mem = (nnz * N_out * 4) + (nnz * 4) + y_size_bytes
 
         # 3. Inter-layer Communication (Bytes)
-        # Volume of x transmitted.
         d_comm = x_size_bytes
-        s_comm = nnz * 8
+
+        # [修正] tanomu.py (Original): s_comm = nnz * 8
+        # [修正] bottomup一致版: 理論ビット数 (32 + log2(N_in)) をバイトに換算
+        import math
+        address_bits = math.ceil(math.log2(N_in)) if N_in > 1 else 1
+        # ビット数をバイトに変換 ( / 8.0 )
+        s_comm = nnz * (4.0 + address_bits / 8.0)
 
         self.costs.dense_flops += d_flops
         self.costs.sparse_flops += s_flops
@@ -925,11 +906,11 @@ if __name__ == "__main__":
         adamw_eps=1e-08,
         clip_grad_norm=1.0,
         seed=2,
-        run_name="mnist_400h_-0_0625",
+        run_name="mnist_2026_02_23_part2",
         use_fashion_mnist=False,
         dropout_rate=0.5,
         v1_dropout=False,
-        random_crop_padding=2,
+        random_crop_padding=0,
         normalize=True,
         fmnist_hflip_p=0.0,
         device="cuda:0"

@@ -11,6 +11,7 @@ import sys
 import os
 import csv
 from datetime import datetime
+from dataclasses import dataclass, asdict
 import matplotlib.pyplot as plt
 
 # =============================================================================
@@ -30,6 +31,15 @@ class DualLogger:
         self.terminal.flush()
         self.log.flush()
 
+@dataclass
+class CostStats:
+    flops_dense: float = 0.0
+    flops_sparse: float = 0.0
+    dm_dense: float = 0.0
+    dm_sparse: float = 0.0
+    bits_dense: float = 0.0
+    bits_sparse: float = 0.0
+
 # =============================================================================
 # [Phase 0] 共通設定
 # =============================================================================
@@ -42,7 +52,7 @@ COMMON_CONFIG = {
     'search_epochs': 25, 
     'final_epochs': 20,    
     'fixed_params': {
-        'activation': 'leaky_relu', # ここを 'relu' に変更するとReLUが使用されます
+        'activation': 'leaky_relu', 
         'lr_activities': 0.0034549692255545815,
         'momentum': 0.0,
         'lr_weights': 5.7652236557134764e-05,
@@ -120,7 +130,29 @@ class bPC_Net(nn.Module):
             activities[i] = curr
         return activities
 
-    def run_inference(self, activities, x_in, y_target, steps, lr_x, momentum, alpha_gen, alpha_disc, is_training=True):
+    def _calc_ops_cost(self, input_tensor, dim_out, stats):
+        """tanomu.py standard calculation."""
+        batch_size, dim_in = input_tensor.shape
+        num_active = (input_tensor.abs() > 1e-6).sum().item()
+        
+        # FLOPs: Dense=2*N, Sparse=2*nnz
+        stats.flops_dense += batch_size * dim_in * dim_out * 2.0
+        stats.flops_sparse += num_active * dim_out * 2.0
+
+        # Data Movement (Bytes):
+        # Dense: Read W(all) + Read X(all) + Write Y(all)
+        stats.dm_dense += (dim_in * dim_out * 4.0) + ((batch_size * dim_in + batch_size * dim_out) * 4.0)
+        
+        # Sparse: Read W(rows) + Read X(val+idx=8B) + Write Y(dense)
+        stats.dm_sparse += (num_active * dim_out * 4.0) + ((num_active * 2.0 + batch_size * dim_out) * 4.0)
+
+        # Communication (Bits):
+        # Dense: 32bit * batch * dim_in
+        stats.bits_dense += batch_size * dim_in * 32
+        # Sparse: 64bit * nnz
+        stats.bits_sparse += num_active * 64
+
+    def run_inference(self, activities, x_in, y_target, steps, lr_x, momentum, alpha_gen, alpha_disc, is_training=True, stats=None):
         x = [a.clone().detach() for a in activities]
         m_buffer = [torch.zeros_like(a) for a in x]
 
@@ -137,6 +169,22 @@ class bPC_Net(nn.Module):
             eps_gen = [] 
             eps_disc = []
             
+            # --- Measurement Integration ---
+            if stats is not None:
+                # Measure Forward Pass (Generation) & Backward Pass (Discrimination)
+                # Note: bPC updates are simultaneous, but conceptually involves matrix multiplies
+                for l in range(len(self.layers)):
+                    layer = self.layers[l]
+                    # Forward Prediction: V(act(x[l]))
+                    # Input to matrix mult is activation(x[l])
+                    act_in = layer.activation(x[l])
+                    self._calc_ops_cost(act_in, layer.out_features, stats)
+
+                    # Backward Prediction: W(act(x[l+1]))
+                    act_feedback = layer.activation(x[l+1])
+                    self._calc_ops_cost(act_feedback, layer.in_features, stats)
+            # -------------------------------
+
             for l in range(len(self.layers) + 1):
                 # Discriminative Error (e_d)
                 if l == 0:
@@ -165,11 +213,18 @@ class bPC_Net(nn.Module):
             new_x = [t.clone() for t in x]
             for l in range(start_idx, end_idx + 1):
                 grad_E = eps_gen[l] + eps_disc[l]
+                
+                # Error Propagation (Matrix Mults for Gradient)
+                # These are also matrix operations
                 layer_below = self.layers[l-1]
+                # prop_gen = eps_gen[l-1] @ W
+                if stats is not None: self._calc_ops_cost(eps_gen[l-1], layer_below.in_features, stats)
                 prop_gen = torch.matmul(eps_gen[l-1], layer_below.W.weight)
                 
                 if l < len(self.layers):
                     layer_above = self.layers[l]
+                    # prop_disc = eps_disc[l+1] @ V
+                    if stats is not None: self._calc_ops_cost(eps_disc[l+1], layer_above.out_features, stats)
                     prop_disc = torch.matmul(eps_disc[l+1], layer_above.V.weight)
                 else:
                     prop_disc = 0
@@ -184,45 +239,9 @@ class bPC_Net(nn.Module):
 
         return x, last_eps_disc, last_eps_gen
 
-# =============================================================================
-# [Metrics] 新しいコスト計算関数 (FLOPs, Data Movement, Transfer Bits)
-# =============================================================================
-def compute_comprehensive_metrics(model, activities, threshold=1e-6):
-    metrics = {
-        'flops_dense': 0.0, 'flops_sparse': 0.0,
-        'dm_dense': 0.0,    'dm_sparse': 0.0,
-        'bits_dense': 0.0,  'bits_sparse': 0.0
-    }
-    
-    batch_size = activities[0].size(0)
-    
-    for l, layer in enumerate(model.layers):
-        x = activities[l] 
-        n_in = layer.in_features
-        n_out = layer.out_features
-        
-        num_active = (torch.abs(x) > threshold).sum().item()
-        total_elements = x.numel() 
-        
-        # FLOPs
-        metrics['flops_dense'] += (batch_size * n_in * n_out) * 2
-        metrics['flops_sparse'] += (num_active * n_out) * 2
-
-        # Data Movement
-        metrics['dm_dense'] += (n_in * n_out) * 4
-        metrics['dm_sparse'] += (num_active * n_out) * 4
-        metrics['dm_dense'] += (batch_size * n_in + batch_size * n_out) * 4
-        metrics['dm_sparse'] += (num_active + batch_size * n_out) * 4 
-
-        # Transfer Bits
-        metrics['bits_dense'] += total_elements * 32
-        address_bits = math.ceil(math.log2(n_in)) if n_in > 1 else 1
-        metrics['bits_sparse'] += num_active * (32 + address_bits)
-
-    return metrics
 
 # =============================================================================
-# [Data] Train/Val/Test Split (修正箇所)
+# [Data] Train/Val/Test Split
 # =============================================================================
 def get_dataloaders(batch_size, is_search=False):
     transform = transforms.Compose([
@@ -234,12 +253,9 @@ def get_dataloaders(batch_size, is_search=False):
     full_test = datasets.MNIST('./data', train=False, download=True, transform=transform)
     
     if is_search:
-        # 探索時はValidationセットが必要なので分割 (5000/5000)
         val_dataset, test_dataset = random_split(full_test, [5000, 5000])
         print("Data Split: Train=60000, Val=5000, Test=5000 (Search Mode)")
     else:
-        # 探索しない時はテストデータを最大化 (10000)
-        # val_datasetは使わないがエラー回避のためtestと同じものを入れておく
         val_dataset = full_test
         test_dataset = full_test
         print("Data Split: Train=60000, Test=10000 (Full Mode)")
@@ -270,7 +286,7 @@ def run_validation_acc(model, loader, device, params):
             final_activities, _, _ = model.run_inference(
                 activities, images, None, steps=params['T_eval'], 
                 lr_x=params['lr_activities'], momentum=params['momentum'], 
-                alpha_gen=params['alpha_gen'], alpha_disc=params['alpha_disc'], is_training=False
+                alpha_gen=params['alpha_gen'], alpha_disc=params['alpha_disc'], is_training=False, stats=None
             )
         _, predicted = torch.max(final_activities[-1], 1)
         total += labels.size(0)
@@ -352,9 +368,7 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
     num_layers_total = len(model.layers) + 1 
     error_history = {f'{t}_L{l}': [] for t in ['disc', 'gen'] for l in range(num_layers_total)}
     
-    cum_flops = {'dense': 0.0, 'sparse': 0.0}
-    cum_dm = {'dense': 0.0, 'sparse': 0.0}
-    cum_bits = {'dense': 0.0, 'sparse': 0.0}
+    cum_stats = CostStats()
 
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
@@ -381,23 +395,14 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
             
             activities = model.forward_init(images)
             
+            # Pass stats object to accumulate costs strictly step-by-step
             final_activities, e_discs, e_gens = model.run_inference(
                 activities, images, labels, steps=best_params['T_train'], 
                 lr_x=best_params['lr_activities'], momentum=best_params['momentum'], 
-                alpha_gen=best_params['alpha_gen'], alpha_disc=best_params['alpha_disc']
+                alpha_gen=best_params['alpha_gen'], alpha_disc=best_params['alpha_disc'],
+                is_training=True, stats=cum_stats
             )
             
-            step_metrics = compute_comprehensive_metrics(model, final_activities, threshold=1e-5)
-            
-            factor = (1 + 4 * best_params['T_train'] + 2)
-            
-            cum_flops['dense']  += step_metrics['flops_dense'] * factor
-            cum_flops['sparse'] += step_metrics['flops_sparse'] * factor
-            cum_dm['dense']     += step_metrics['dm_dense'] * factor
-            cum_dm['sparse']    += step_metrics['dm_sparse'] * factor
-            cum_bits['dense']   += step_metrics['bits_dense'] * factor
-            cum_bits['sparse']  += step_metrics['bits_sparse'] * factor
-
             for l in range(num_layers_total):
                 epoch_errs[f'disc_L{l}'] += torch.norm(e_discs[l], p=2, dim=1).sum().item()
                 epoch_errs[f'gen_L{l}'] += torch.norm(e_gens[l], p=2, dim=1).sum().item()
@@ -422,14 +427,14 @@ def run_fixed_epoch_training(best_params, train_loader, test_loader, csv_path, e
         acc = run_validation_acc(model, test_loader, device, best_params)
         
         print(f"Epoch {epoch:02d} | Acc: {acc:.2f}% | MDL: {mdl_total:.0f} | "
-              f"Bits(Sparse): {cum_bits['sparse']/1e9:.2f}Gb")
+              f"Bits(Sparse): {cum_stats.bits_sparse/1e9:.2f}Gb")
         
         with open(csv_path, 'a', newline='') as f:
             csv.writer(f).writerow([
                 epoch, acc, mdl_total, 
-                cum_flops['dense']/1e9, cum_flops['sparse']/1e9,
-                cum_dm['dense']/1e9,    cum_dm['sparse']/1e9,
-                cum_bits['dense']/1e9,  cum_bits['sparse']/1e9, 
+                cum_stats.flops_dense/1e9, cum_stats.flops_sparse/1e9,
+                cum_stats.dm_dense/1e9,    cum_stats.dm_sparse/1e9,
+                cum_stats.bits_dense/1e9,  cum_stats.bits_sparse/1e9, 
                 time.time()-start_time
             ])
 
