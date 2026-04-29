@@ -209,7 +209,7 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.e_in_disc + self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
@@ -835,15 +835,15 @@ if __name__ == "__main__":
         lt_scheduler_type="cyclic_phase",
         gamma_value=0.05,
         gamma_every_n=None,
-        t_init_cycles=15,
-        phase2_cycles=15,
+        t_init_cycles=20,
+        phase2_cycles=20,
         alpha_disc = 1,
-        alpha_gen = 0.01,
+        alpha_gen = 0.0225,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=50,
         use_adamw=True,
-        adamw_weight_decay=0.01,
+        adamw_weight_decay=0.05,
         adamw_betas=(0.9, 0.999),
         adamw_eps=1e-08,
         clip_grad_norm=1.0,

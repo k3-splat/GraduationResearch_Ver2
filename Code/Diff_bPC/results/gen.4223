@@ -1,0 +1,20 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Epoch 01: train acc 58.98% | test acc 72.60% | Avg Spikes/N (Train P2): s_a=0.11, s_e_disc=0.03 , s_e_gen=0.03| Avg Spikes/N (Test P1):  s_a=0.17, s_e_disc=0.03, s_e_gen=0.28
+Epoch 02: train acc 50.77% | test acc 60.07% | Avg Spikes/N (Train P2): s_a=0.19, s_e_disc=0.04 , s_e_gen=0.60| Avg Spikes/N (Test P1):  s_a=0.49, s_e_disc=0.28, s_e_gen=0.93
+Epoch 03: train acc 40.45% | test acc 46.75% | Avg Spikes/N (Train P2): s_a=0.23, s_e_disc=0.09 , s_e_gen=1.03| Avg Spikes/N (Test P1):  s_a=0.91, s_e_disc=0.69, s_e_gen=1.29
+Epoch 04: train acc 37.32% | test acc 42.53% | Avg Spikes/N (Train P2): s_a=0.24, s_e_disc=0.14 , s_e_gen=1.29| Avg Spikes/N (Test P1):  s_a=1.39, s_e_disc=1.20, s_e_gen=1.78
+Epoch 05: train acc 26.62% | test acc 28.01% | Avg Spikes/N (Train P2): s_a=0.28, s_e_disc=0.20 , s_e_gen=1.43| Avg Spikes/N (Test P1):  s_a=1.95, s_e_disc=1.78, s_e_gen=2.43
+Epoch 06: train acc 36.93% | test acc 42.90% | Avg Spikes/N (Train P2): s_a=0.38, s_e_disc=0.27 , s_e_gen=1.48| Avg Spikes/N (Test P1):  s_a=2.35, s_e_disc=2.15, s_e_gen=2.92
+Epoch 07: train acc 54.73% | test acc 63.31% | Avg Spikes/N (Train P2): s_a=0.75, s_e_disc=0.46 , s_e_gen=1.38| Avg Spikes/N (Test P1):  s_a=2.87, s_e_disc=2.50, s_e_gen=2.16
+Epoch 08: train acc 54.68% | test acc 61.74% | Avg Spikes/N (Train P2): s_a=1.64, s_e_disc=1.12 , s_e_gen=1.14| Avg Spikes/N (Test P1):  s_a=3.13, s_e_disc=2.74, s_e_gen=2.36
+Epoch 09: train acc 53.48% | test acc 61.86% | Avg Spikes/N (Train P2): s_a=1.66, s_e_disc=1.11 , s_e_gen=1.11| Avg Spikes/N (Test P1):  s_a=3.10, s_e_disc=2.71, s_e_gen=2.44
+Epoch 10: train acc 52.55% | test acc 62.01% | Avg Spikes/N (Train P2): s_a=1.69, s_e_disc=1.14 , s_e_gen=1.04| Avg Spikes/N (Test P1):  s_a=3.07, s_e_disc=2.67, s_e_gen=2.36
+Generating digits for epoch 10...
+Generated images saved to: runs/generated_images/epoch_010_generated.png
+
+Run complete. Results saved to runs/mnist_400h.json

@@ -1,0 +1,38 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Generating digits for epoch 1...
+Generated images saved to: runs/generated_images/epoch_001_generated.png
+Epoch 01: train acc 84.30% | test acc 90.65% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 2...
+Generated images saved to: runs/generated_images/epoch_002_generated.png
+Epoch 02: train acc 89.14% | test acc 93.43% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 3...
+Generated images saved to: runs/generated_images/epoch_003_generated.png
+Epoch 03: train acc 91.27% | test acc 94.70% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 4...
+Generated images saved to: runs/generated_images/epoch_004_generated.png
+Epoch 04: train acc 92.37% | test acc 95.41% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 5...
+Generated images saved to: runs/generated_images/epoch_005_generated.png
+Epoch 05: train acc 92.96% | test acc 95.73% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 6...
+Generated images saved to: runs/generated_images/epoch_006_generated.png
+Epoch 06: train acc 93.44% | test acc 95.83% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 7...
+Generated images saved to: runs/generated_images/epoch_007_generated.png
+Epoch 07: train acc 93.82% | test acc 96.04% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 8...
+Generated images saved to: runs/generated_images/epoch_008_generated.png
+Epoch 08: train acc 94.07% | test acc 96.15% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 9...
+Generated images saved to: runs/generated_images/epoch_009_generated.png
+Epoch 09: train acc 94.27% | test acc 96.35% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 10...
+Generated images saved to: runs/generated_images/epoch_010_generated.png
+Epoch 10: train acc 94.53% | test acc 96.54% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+
+Run complete. Results saved to runs/mnist_400h.json

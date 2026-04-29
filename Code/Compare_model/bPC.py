@@ -50,7 +50,7 @@ COMMON_CONFIG = {
     'search_epochs': 25,    # 論文 Table 5 では Epoch 25
     
     # 本番学習設定
-    'final_epochs': 25,    
+    'final_epochs': 40,    
     
     # 固定パラメータ (探索スキップ時に使用するデフォルト設定)
     'fixed_params': {

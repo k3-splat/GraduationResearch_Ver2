@@ -830,7 +830,7 @@ if __name__ == "__main__":
         phase2_cycles=15,
         pc_lr=0.0001,
         batch_size=256,
-        epochs=10,
+        epochs=40,
         use_adamw=True,
         adamw_weight_decay=0.01,
         adamw_betas=(0.9, 0.999),
