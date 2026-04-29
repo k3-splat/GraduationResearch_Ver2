@@ -1,0 +1,7 @@
+Starting bPC Experiment.
+
+============================================================
+PHASE 1: Hyperparameter Search (Optuna - Table 5)
+Objective: Minimize [(1 - Accuracy) + RMSE]
+============================================================
+Computing validation class averages for RMSE optimization...

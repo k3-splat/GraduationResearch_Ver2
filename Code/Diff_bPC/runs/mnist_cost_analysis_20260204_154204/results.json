@@ -1,0 +1,304 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": -2,
+        "lt_n": 7,
+        "lt_a": 1.0,
+        "lt_min_a": 0.0,
+        "lt_min_e_disc": 0.0,
+        "lt_min_e_gen": 0.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 20,
+        "phase2_cycles": 20,
+        "alpha_disc": 1,
+        "alpha_gen": 0.01,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 20,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_cost_analysis",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 2,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "test_acc": 74.04,
+            "rmse": 0.49841490387916565,
+            "costs": {
+                "dense_flops": 43162848000000.0,
+                "sparse_flops": 2773367430887.856,
+                "dense_mem_bytes": 1566566688000.0,
+                "sparse_mem_bytes": 8036814397103.248,
+                "dense_comm_bits": 1297766400000.0,
+                "sparse_comm_bits": 32706232134.0
+            }
+        },
+        {
+            "epoch": 2,
+            "test_acc": 78.16,
+            "rmse": 0.44083839654922485,
+            "costs": {
+                "dense_flops": 86325696000000.0,
+                "sparse_flops": 7543074166063.626,
+                "dense_mem_bytes": 3133133376000.0,
+                "sparse_mem_bytes": 22375175895089.793,
+                "dense_comm_bits": 2595532800000.0,
+                "sparse_comm_bits": 90733566777.0
+            }
+        },
+        {
+            "epoch": 3,
+            "test_acc": 81.13,
+            "rmse": 0.6177880167961121,
+            "costs": {
+                "dense_flops": 129488544000000.0,
+                "sparse_flops": 12416279600943.225,
+                "dense_mem_bytes": 4699700064000.0,
+                "sparse_mem_bytes": 36977940843574.46,
+                "dense_comm_bits": 3893299200000.0,
+                "sparse_comm_bits": 150121665143.0
+            }
+        },
+        {
+            "epoch": 4,
+            "test_acc": 83.13,
+            "rmse": 1.0366690158843994,
+            "costs": {
+                "dense_flops": 172651392000000.0,
+                "sparse_flops": 17294641859470.766,
+                "dense_mem_bytes": 6266266752000.0,
+                "sparse_mem_bytes": 51621483559835.92,
+                "dense_comm_bits": 5191065600000.0,
+                "sparse_comm_bits": 209529882618.0
+            }
+        },
+        {
+            "epoch": 5,
+            "test_acc": 82.11,
+            "rmse": 1.1715606451034546,
+            "costs": {
+                "dense_flops": 215814240000000.0,
+                "sparse_flops": 22340913362782.74,
+                "dense_mem_bytes": 7832833440000.0,
+                "sparse_mem_bytes": 66899883592310.58,
+                "dense_comm_bits": 6488832000000.0,
+                "sparse_comm_bits": 270637032779.0
+            }
+        },
+        {
+            "epoch": 6,
+            "test_acc": 82.1,
+            "rmse": 1.3910783529281616,
+            "costs": {
+                "dense_flops": 258977088000000.0,
+                "sparse_flops": 27637881835398.74,
+                "dense_mem_bytes": 9399400128000.0,
+                "sparse_mem_bytes": 83092282272380.58,
+                "dense_comm_bits": 7786598400000.0,
+                "sparse_comm_bits": 334063650284.0
+            }
+        },
+        {
+            "epoch": 7,
+            "test_acc": 80.78,
+            "rmse": 1.8870742321014404,
+            "costs": {
+                "dense_flops": 302139936000000.0,
+                "sparse_flops": 33542639183586.74,
+                "dense_mem_bytes": 10965966816000.0,
+                "sparse_mem_bytes": 101323566895493.56,
+                "dense_comm_bits": 9084364800000.0,
+                "sparse_comm_bits": 403678407106.0
+            }
+        },
+        {
+            "epoch": 8,
+            "test_acc": 81.6,
+            "rmse": 2.597175359725952,
+            "costs": {
+                "dense_flops": 345302784000000.0,
+                "sparse_flops": 39408186244502.734,
+                "dense_mem_bytes": 12532533504000.0,
+                "sparse_mem_bytes": 119469568243036.3,
+                "dense_comm_bits": 10382131200000.0,
+                "sparse_comm_bits": 472603675263.0
+            }
+        },
+        {
+            "epoch": 9,
+            "test_acc": 81.11,
+            "rmse": 2.7693676948547363,
+            "costs": {
+                "dense_flops": 388465632000000.0,
+                "sparse_flops": 45147971362654.734,
+                "dense_mem_bytes": 14099100192000.0,
+                "sparse_mem_bytes": 137261851705368.6,
+                "dense_comm_bits": 11679897600000.0,
+                "sparse_comm_bits": 539873620399.0
+            }
+        },
+        {
+            "epoch": 10,
+            "test_acc": 81.28,
+            "rmse": 2.4254698753356934,
+            "costs": {
+                "dense_flops": 431628480000000.0,
+                "sparse_flops": 50743831092594.734,
+                "dense_mem_bytes": 15665666880000.0,
+                "sparse_mem_bytes": 154640033693781.94,
+                "dense_comm_bits": 12977664000000.0,
+                "sparse_comm_bits": 605321300886.0
+            }
+        },
+        {
+            "epoch": 11,
+            "test_acc": 82.53,
+            "rmse": 2.8011038303375244,
+            "costs": {
+                "dense_flops": 474791328000000.0,
+                "sparse_flops": 56205501692150.734,
+                "dense_mem_bytes": 17232233568000.0,
+                "sparse_mem_bytes": 171634313530258.7,
+                "dense_comm_bits": 14275430400000.0,
+                "sparse_comm_bits": 669078813357.0
+            }
+        },
+        {
+            "epoch": 12,
+            "test_acc": 81.71,
+            "rmse": 3.5691075325012207,
+            "costs": {
+                "dense_flops": 517954176000000.0,
+                "sparse_flops": 61548884819698.734,
+                "dense_mem_bytes": 18798800256000.0,
+                "sparse_mem_bytes": 188290750524505.88,
+                "dense_comm_bits": 15573196800000.0,
+                "sparse_comm_bits": 731371407893.0
+            }
+        },
+        {
+            "epoch": 13,
+            "test_acc": 81.88,
+            "rmse": 3.2763450145721436,
+            "costs": {
+                "dense_flops": 561117024000000.0,
+                "sparse_flops": 66787274652146.734,
+                "dense_mem_bytes": 20365366944000.0,
+                "sparse_mem_bytes": 204648725327401.25,
+                "dense_comm_bits": 16870963200000.0,
+                "sparse_comm_bits": 792378453738.0
+            }
+        },
+        {
+            "epoch": 14,
+            "test_acc": 81.84,
+            "rmse": 2.9215376377105713,
+            "costs": {
+                "dense_flops": 604279872000000.0,
+                "sparse_flops": 71941620239418.73,
+                "dense_mem_bytes": 21931933632000.0,
+                "sparse_mem_bytes": 220771577269440.8,
+                "dense_comm_bits": 18168729600000.0,
+                "sparse_comm_bits": 852357826729.0
+            }
+        },
+        {
+            "epoch": 15,
+            "test_acc": 82.44,
+            "rmse": 2.703864812850952,
+            "costs": {
+                "dense_flops": 647442720000000.0,
+                "sparse_flops": 77029310910834.73,
+                "dense_mem_bytes": 23498500320000.0,
+                "sparse_mem_bytes": 236708778735320.28,
+                "dense_comm_bits": 19466496000000.0,
+                "sparse_comm_bits": 911529476306.0
+            }
+        },
+        {
+            "epoch": 16,
+            "test_acc": 82.78,
+            "rmse": 2.802194595336914,
+            "costs": {
+                "dense_flops": 690605568000000.0,
+                "sparse_flops": 82058979616642.73,
+                "dense_mem_bytes": 25065067008000.0,
+                "sparse_mem_bytes": 252486852370985.8,
+                "dense_comm_bits": 20764262400000.0,
+                "sparse_comm_bits": 969999375575.0
+            }
+        },
+        {
+            "epoch": 17,
+            "test_acc": 83.64,
+            "rmse": 2.8044373989105225,
+            "costs": {
+                "dense_flops": 733768416000000.0,
+                "sparse_flops": 87044173639642.73,
+                "dense_mem_bytes": 26631633696000.0,
+                "sparse_mem_bytes": 268148032087961.66,
+                "dense_comm_bits": 22062028800000.0,
+                "sparse_comm_bits": 1027928016352.0
+            }
+        },
+        {
+            "epoch": 18,
+            "test_acc": 84.14,
+            "rmse": 3.1134278774261475,
+            "costs": {
+                "dense_flops": 776931264000000.0,
+                "sparse_flops": 91987683835090.73,
+                "dense_mem_bytes": 28198200384000.0,
+                "sparse_mem_bytes": 283700039774676.3,
+                "dense_comm_bits": 23359795200000.0,
+                "sparse_comm_bits": 1085352873219.0
+            }
+        },
+        {
+            "epoch": 19,
+            "test_acc": 83.87,
+            "rmse": 3.3287086486816406,
+            "costs": {
+                "dense_flops": 820094112000000.0,
+                "sparse_flops": 96895630235378.73,
+                "dense_mem_bytes": 29764767072000.0,
+                "sparse_mem_bytes": 299160191431294.94,
+                "dense_comm_bits": 24657561600000.0,
+                "sparse_comm_bits": 1142352585126.0
+            }
+        },
+        {
+            "epoch": 20,
+            "test_acc": 84.84,
+            "rmse": 3.548938274383545,
+            "costs": {
+                "dense_flops": 863256960000000.0,
+                "sparse_flops": 101775189921622.73,
+                "dense_mem_bytes": 31331333760000.0,
+                "sparse_mem_bytes": 314551754711968.56,
+                "dense_comm_bits": 25955328000000.0,
+                "sparse_comm_bits": 1199008689797.0
+            }
+        }
+    ]
+}

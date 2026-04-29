@@ -1,0 +1,159 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 15,
+        "phase2_cycles": 15,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 10,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "ex_cyclic_phase",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 2,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 93.17,
+            "test_acc": 93.48,
+            "avg_neg_activity_ratio": 0.5008839030877009,
+            "cum_flops_dense_G": 5788.8246,
+            "cum_flops_sparse_G": 37.81073782,
+            "cum_dm_dense_MB": 112046.81396484375,
+            "cum_dm_sparse_MB": 100207.19109344482,
+            "cum_bits_dense_Gb": 461.952,
+            "cum_bits_sparse_Gb": 3.5905787
+        },
+        {
+            "epoch": 2,
+            "train_acc": 95.30833333333334,
+            "test_acc": 95.13,
+            "avg_neg_activity_ratio": 0.5149823505881338,
+            "cum_flops_dense_G": 11577.6492,
+            "cum_flops_sparse_G": 75.54503966,
+            "cum_dm_dense_MB": 224093.6279296875,
+            "cum_dm_sparse_MB": 200271.39860534668,
+            "cum_bits_dense_Gb": 923.904,
+            "cum_bits_sparse_Gb": 7.206327884
+        },
+        {
+            "epoch": 3,
+            "train_acc": 96.24333333333334,
+            "test_acc": 95.88,
+            "avg_neg_activity_ratio": 0.521650355150493,
+            "cum_flops_dense_G": 17366.4738,
+            "cum_flops_sparse_G": 113.26639454,
+            "cum_dm_dense_MB": 336140.44189453125,
+            "cum_dm_sparse_MB": 300314.27824020386,
+            "cum_bits_dense_Gb": 1385.856,
+            "cum_bits_sparse_Gb": 10.856890926
+        },
+        {
+            "epoch": 4,
+            "train_acc": 96.82666666666667,
+            "test_acc": 96.35,
+            "avg_neg_activity_ratio": 0.5203329333160356,
+            "cum_flops_dense_G": 23155.2984,
+            "cum_flops_sparse_G": 150.99833832,
+            "cum_dm_dense_MB": 448187.255859375,
+            "cum_dm_sparse_MB": 400382.7939720154,
+            "cum_bits_dense_Gb": 1847.808,
+            "cum_bits_sparse_Gb": 14.565248265
+        },
+        {
+            "epoch": 5,
+            "train_acc": 97.19666666666667,
+            "test_acc": 96.64,
+            "avg_neg_activity_ratio": 0.5190172818284033,
+            "cum_flops_dense_G": 28944.123,
+            "cum_flops_sparse_G": 188.73884996,
+            "cum_dm_dense_MB": 560234.0698242188,
+            "cum_dm_sparse_MB": 500471.78592300415,
+            "cum_bits_dense_Gb": 2309.76,
+            "cum_bits_sparse_Gb": 18.317584854
+        },
+        {
+            "epoch": 6,
+            "train_acc": 97.52,
+            "test_acc": 96.86,
+            "avg_neg_activity_ratio": 0.5178483258735515,
+            "cum_flops_dense_G": 34732.9476,
+            "cum_flops_sparse_G": 226.48735994,
+            "cum_dm_dense_MB": 672280.8837890625,
+            "cum_dm_sparse_MB": 600579.3232116699,
+            "cum_bits_dense_Gb": 2771.712,
+            "cum_bits_sparse_Gb": 22.1049525
+        },
+        {
+            "epoch": 7,
+            "train_acc": 97.74833333333333,
+            "test_acc": 97.11,
+            "avg_neg_activity_ratio": 0.5162590003892062,
+            "cum_flops_dense_G": 40521.7722,
+            "cum_flops_sparse_G": 264.24438192,
+            "cum_dm_dense_MB": 784327.6977539062,
+            "cum_dm_sparse_MB": 700706.2402954102,
+            "cum_bits_dense_Gb": 3233.664,
+            "cum_bits_sparse_Gb": 25.9258587
+        },
+        {
+            "epoch": 8,
+            "train_acc": 97.92,
+            "test_acc": 97.18,
+            "avg_neg_activity_ratio": 0.5153876248702646,
+            "cum_flops_dense_G": 46310.5968,
+            "cum_flops_sparse_G": 302.00834216,
+            "cum_dm_dense_MB": 896374.51171875,
+            "cum_dm_sparse_MB": 800849.0767440796,
+            "cum_bits_dense_Gb": 3695.616,
+            "cum_bits_sparse_Gb": 29.775392242
+        },
+        {
+            "epoch": 9,
+            "train_acc": 98.05,
+            "test_acc": 97.3,
+            "avg_neg_activity_ratio": 0.5140960014487115,
+            "cum_flops_dense_G": 52099.4214,
+            "cum_flops_sparse_G": 339.78022848,
+            "cum_dm_dense_MB": 1008421.3256835938,
+            "cum_dm_sparse_MB": 901009.5396995544,
+            "cum_bits_dense_Gb": 4157.568,
+            "cum_bits_sparse_Gb": 33.651745819
+        },
+        {
+            "epoch": 10,
+            "train_acc": 98.16333333333333,
+            "test_acc": 97.39,
+            "avg_neg_activity_ratio": 0.5137104712636223,
+            "cum_flops_dense_G": 57888.246,
+            "cum_flops_sparse_G": 377.55696144,
+            "cum_dm_dense_MB": 1120468.1396484375,
+            "cum_dm_sparse_MB": 1001181.0557670593,
+            "cum_bits_dense_Gb": 4619.52,
+            "cum_bits_sparse_Gb": 37.547378026
+        }
+    ]
+}

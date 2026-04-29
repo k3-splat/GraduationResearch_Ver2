@@ -1,0 +1,26 @@
+
+============================================================
+PHASE 2: Final Training (Epochs: 20)
+============================================================
+Epoch 01 | Acc: 90.44% | FPO: 1333.9G | DM: 23.8GB
+Epoch 02 | Acc: 92.80% | FPO: 2667.8G | DM: 47.7GB
+Epoch 03 | Acc: 94.20% | FPO: 4001.8G | DM: 71.5GB
+Epoch 04 | Acc: 94.76% | FPO: 5335.7G | DM: 95.4GB
+Epoch 05 | Acc: 95.16% | FPO: 6669.6G | DM: 119.2GB
+Epoch 06 | Acc: 95.42% | FPO: 8003.5G | DM: 143.0GB
+Epoch 07 | Acc: 95.80% | FPO: 9337.4G | DM: 166.9GB
+Epoch 08 | Acc: 95.80% | FPO: 10671.4G | DM: 190.7GB
+Epoch 09 | Acc: 96.14% | FPO: 12005.3G | DM: 214.5GB
+Epoch 10 | Acc: 96.28% | FPO: 13339.2G | DM: 238.4GB
+Epoch 11 | Acc: 96.28% | FPO: 14673.1G | DM: 262.2GB
+Epoch 12 | Acc: 96.40% | FPO: 16007.0G | DM: 286.1GB
+Epoch 13 | Acc: 96.50% | FPO: 17341.0G | DM: 309.9GB
+Epoch 14 | Acc: 96.60% | FPO: 18674.9G | DM: 333.7GB
+Epoch 15 | Acc: 96.68% | FPO: 20008.8G | DM: 357.6GB
+Epoch 16 | Acc: 96.70% | FPO: 21342.7G | DM: 381.4GB
+Epoch 17 | Acc: 96.80% | FPO: 22676.6G | DM: 405.3GB
+Epoch 18 | Acc: 96.90% | FPO: 24010.6G | DM: 429.1GB
+Epoch 19 | Acc: 96.80% | FPO: 25344.5G | DM: 452.9GB
+Epoch 20 | Acc: 96.96% | FPO: 26678.4G | DM: 476.8GB
+Computing Final RMSE and generating images...
+Results saved: logs/error_trends_20260204_190420.png, logs/generated_digits_20260204_190420.png

@@ -1,0 +1,28 @@
+Data Split: Train=60000, Test=10000 (Full Mode)
+
+============================================================
+PHASE 2: Final Training with Advanced Metrics (Epochs: 20)
+============================================================
+Epoch 01 | Acc: 89.98% | MDL: 35730 | Bits(Sparse): 103.59Gb
+Epoch 02 | Acc: 92.47% | MDL: 23672 | Bits(Sparse): 207.18Gb
+Epoch 03 | Acc: 93.62% | MDL: 19532 | Bits(Sparse): 310.76Gb
+Epoch 04 | Acc: 94.32% | MDL: 17205 | Bits(Sparse): 414.35Gb
+Epoch 05 | Acc: 94.74% | MDL: 15605 | Bits(Sparse): 517.94Gb
+Epoch 06 | Acc: 95.11% | MDL: 14414 | Bits(Sparse): 621.53Gb
+Epoch 07 | Acc: 95.25% | MDL: 13466 | Bits(Sparse): 725.12Gb
+Epoch 08 | Acc: 95.41% | MDL: 12698 | Bits(Sparse): 828.70Gb
+Epoch 09 | Acc: 95.56% | MDL: 12048 | Bits(Sparse): 932.29Gb
+Epoch 10 | Acc: 95.67% | MDL: 11491 | Bits(Sparse): 1035.88Gb
+Epoch 11 | Acc: 95.81% | MDL: 11008 | Bits(Sparse): 1139.47Gb
+Epoch 12 | Acc: 95.78% | MDL: 10585 | Bits(Sparse): 1243.06Gb
+Epoch 13 | Acc: 95.93% | MDL: 10210 | Bits(Sparse): 1346.64Gb
+Epoch 14 | Acc: 96.00% | MDL: 9876 | Bits(Sparse): 1450.23Gb
+Epoch 15 | Acc: 96.02% | MDL: 9576 | Bits(Sparse): 1553.82Gb
+Epoch 16 | Acc: 96.25% | MDL: 9306 | Bits(Sparse): 1657.41Gb
+Epoch 17 | Acc: 96.31% | MDL: 9070 | Bits(Sparse): 1761.00Gb
+Epoch 18 | Acc: 96.18% | MDL: 8846 | Bits(Sparse): 1864.58Gb
+Epoch 19 | Acc: 96.29% | MDL: 8641 | Bits(Sparse): 1968.17Gb
+Epoch 20 | Acc: 96.39% | MDL: 8465 | Bits(Sparse): 2071.76Gb
+Computing Final RMSE and generating images...
+Final Generative RMSE: 0.3148
+Results saved: logs/error_trends_20260209_223238.png, logs/generated_digits_20260209_223238.png

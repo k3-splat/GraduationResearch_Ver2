@@ -196,8 +196,8 @@ class DiffPCLayerTorch(nn.Module):
 
         self.x_F_disc.add_(self.s_in_disc * l_t_prev)
         self.x_F_gen.add_(self.s_in_gen * l_t_prev)
-        self.e_T_disc = self.alpha_disc * (self.x_T - self.x_F_disc)
-        self.e_T_gen = self.alpha_gen * (self.x_T - self.x_F_gen)
+        self.e_T_disc = self.x_T - self.x_F_disc
+        self.e_T_gen = self.x_T - self.x_F_gen
         if hasattr(self, 'ff_init_duration') and sample_step < self.ff_init_duration and bottomup_mask:
             self.x_F_disc.zero_()
             self.e_T_disc.zero_()
@@ -209,7 +209,7 @@ class DiffPCLayerTorch(nn.Module):
         self.e_in_gen.add_(e_in_gen.to(self.device) * l_t_prev)
 
         if not clamp_status:
-            self.x_T.add_(self.y * (-self.e_T_disc - self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
+            self.x_T.add_(self.y * (-self.alpha_disc * self.e_T_disc - self.alpha_gen * self.e_T_gen + (self.x_T > 0).float() * (self.alpha_disc * self.e_in_disc + self.alpha_gen * self.e_in_gen)))
         
         diff_act = self.x_T - self.x_A
         s_A_new = torch.sign(diff_act) * (diff_act.abs() > self.l_t)
@@ -409,10 +409,10 @@ class DiffPCNetworkTorch(nn.Module):
             post_eT_disc = lyr.e_T_disc
             post_eT_gen = self.input_driver.e_T_gen if l == 0 else self.layers[l-1].e_T_gen
 
-            self.W[l].grad = - (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
-            self.W_bias[l].grad = - post_eT_disc.sum(dim=0, keepdim=True).T / Bf
-            self.V[l].grad = - (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
-            self.V_bias[l].grad = - post_eT_gen.sum(dim=0, keepdim=True).T / Bf
+            self.W[l].grad = - cfg.alpha_disc * (post_eT_disc.T @ torch.relu(pre_xT_disc)) / Bf
+            self.W_bias[l].grad = - cfg.alpha_disc * post_eT_disc.sum(dim=0, keepdim=True).T / Bf
+            self.V[l].grad = - cfg.alpha_gen * (post_eT_gen.T @ torch.relu(pre_xT_gen)) / Bf
+            self.V_bias[l].grad = - cfg.alpha_gen * post_eT_gen.sum(dim=0, keepdim=True).T / Bf
 
         if self.cfg.clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(list(self.W) + list(self.W_bias) + list(self.V) + list(self.V_bias), self.cfg.clip_grad_norm)
@@ -558,7 +558,7 @@ def run_batch_gen_test_two_phase(net: DiffPCNetworkTorch, y_onehot: torch.Tensor
     l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
 
     # Phase-1: Generation (Top-down settling)
-    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1 / cfg.alpha_gen, "n": 1})
+    y_phase1 = get_y_scheduler("on_cycle_start", {"l_t_scheduler": l_t_sched, "gamma": 1, "n": 1})
     l_t_sched.begin_phase(phase_start_step=0, phase_len=steps_phase1, a=cfg.lt_a)
     net.swap_schedulers(l_t_sched, y_phase1)
 
@@ -624,7 +624,7 @@ def visualize_generated_digits(net: DiffPCNetworkTorch, cfg: DiffPCConfig,
     gen_imgs = torch.clamp(gen_imgs, 0.0, 1.0)
     
     # 画像を保存
-    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_generated.png")
+    save_path = os.path.join(output_dir, f"epoch_{epoch:03d}_gjggenerated.png")
     save_image(gen_imgs, save_path, nrow=10)
     print(f"Generated images saved to: {save_path}")
 
@@ -790,9 +790,10 @@ def main(cfg: DiffPCConfig):
             "avg_spikes_per_neuron_test_p1_se_gen": avg_se_gen_test_p1,
         })
 
-    # 画像生成の可視化
-    print(f"Generating digits for epoch {epoch}...")
-    visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
+        if epoch % 5 == 0:
+            # 画像生成の可視化
+            print(f"Generating digits for epoch {epoch}...")
+            visualize_generated_digits(net, cfg, l_t_spec, y_phase2_spec, epoch, output_dir=gen_dir)
 
     # Save
     with open(log_path, "w") as f:

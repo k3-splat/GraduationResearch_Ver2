@@ -1,0 +1,161 @@
+{
+    "config": {
+        "layer_dims": [
+            10,
+            400,
+            784
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.1,
+        "gamma_every_n": null,
+        "t_init_cycles": 10,
+        "phase2_cycles": 10,
+        "alpha_in": 1.0,
+        "alpha_out": 0.01,
+        "pc_lr": 0.0005,
+        "batch_size": 256,
+        "epochs": 20,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.01,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 42,
+        "run_name": "mnist_generate",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.0,
+        "v1_dropout": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "test_acc": 9.8,
+            "avg_sa": 0.15676459740990992,
+            "avg_se": 3.6853537021396394
+        },
+        {
+            "epoch": 2,
+            "test_acc": 9.8,
+            "avg_sa": 0.22321889076576576,
+            "avg_se": 4.866234431306307
+        },
+        {
+            "epoch": 3,
+            "test_acc": 9.8,
+            "avg_sa": 0.24927045326576577,
+            "avg_se": 5.199624141328829
+        },
+        {
+            "epoch": 4,
+            "test_acc": 9.8,
+            "avg_sa": 0.2599818412162162,
+            "avg_se": 5.3308625
+        },
+        {
+            "epoch": 5,
+            "test_acc": 9.8,
+            "avg_sa": 0.26760874155405406,
+            "avg_se": 5.409268468468468
+        },
+        {
+            "epoch": 6,
+            "test_acc": 9.8,
+            "avg_sa": 0.2724516891891892,
+            "avg_se": 5.501902787162162
+        },
+        {
+            "epoch": 7,
+            "test_acc": 9.8,
+            "avg_sa": 0.27339021677927927,
+            "avg_se": 5.563679701576577
+        },
+        {
+            "epoch": 8,
+            "test_acc": 9.8,
+            "avg_sa": 0.2718542652027027,
+            "avg_se": 5.611557516891892
+        },
+        {
+            "epoch": 9,
+            "test_acc": 9.8,
+            "avg_sa": 0.2688689048423423,
+            "avg_se": 5.6418773226351355
+        },
+        {
+            "epoch": 10,
+            "test_acc": 9.8,
+            "avg_sa": 0.26522125563063065,
+            "avg_se": 5.668952547860361
+        },
+        {
+            "epoch": 11,
+            "test_acc": 9.8,
+            "avg_sa": 0.2613843890765766,
+            "avg_se": 5.697567736486486
+        },
+        {
+            "epoch": 12,
+            "test_acc": 9.8,
+            "avg_sa": 0.2572195523648649,
+            "avg_se": 5.721917581644144
+        },
+        {
+            "epoch": 13,
+            "test_acc": 9.8,
+            "avg_sa": 0.2535996903153153,
+            "avg_se": 5.748532080518018
+        },
+        {
+            "epoch": 14,
+            "test_acc": 9.8,
+            "avg_sa": 0.25066753941441444,
+            "avg_se": 5.77043018018018
+        },
+        {
+            "epoch": 15,
+            "test_acc": 9.8,
+            "avg_sa": 0.24798637387387387,
+            "avg_se": 5.794160247747747
+        },
+        {
+            "epoch": 16,
+            "test_acc": 9.8,
+            "avg_sa": 0.24555146396396396,
+            "avg_se": 5.8077409487612615
+        },
+        {
+            "epoch": 17,
+            "test_acc": 9.8,
+            "avg_sa": 0.24354108952702702,
+            "avg_se": 5.8202169904279275
+        },
+        {
+            "epoch": 18,
+            "test_acc": 9.8,
+            "avg_sa": 0.24146663851351352,
+            "avg_se": 5.813530813626127
+        },
+        {
+            "epoch": 19,
+            "test_acc": 9.8,
+            "avg_sa": 0.23982699887387388,
+            "avg_se": 5.803885740427928
+        },
+        {
+            "epoch": 20,
+            "test_acc": 9.8,
+            "avg_sa": 0.23819335585585585,
+            "avg_se": 5.7802722269144144
+        }
+    ]
+}

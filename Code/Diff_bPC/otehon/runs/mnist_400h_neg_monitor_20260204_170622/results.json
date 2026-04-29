@@ -1,0 +1,224 @@
+{
+    "config": {
+        "layer_dims": [
+            784,
+            400,
+            10
+        ],
+        "lt_m": 0,
+        "lt_n": 5,
+        "lt_a": 1.0,
+        "lt_min_a": 0.0,
+        "lt_min_e_disc": 0.0,
+        "lt_min_e_gen": 0.0,
+        "lt_scheduler_type": "cyclic_phase",
+        "gamma_value": 0.05,
+        "gamma_every_n": null,
+        "t_init_cycles": 15,
+        "phase2_cycles": 15,
+        "alpha_disc": 1.0,
+        "alpha_gen": 0.01,
+        "pc_lr": 0.0001,
+        "batch_size": 256,
+        "epochs": 20,
+        "use_adamw": true,
+        "adamw_weight_decay": 0.0,
+        "adamw_betas": [
+            0.9,
+            0.999
+        ],
+        "adamw_eps": 1e-08,
+        "clip_grad_norm": 1.0,
+        "seed": 2,
+        "run_name": "mnist_400h_neg_monitor",
+        "use_fashion_mnist": false,
+        "dropout_rate": 0.5,
+        "v1_dropout": false,
+        "random_crop_padding": 0,
+        "normalize": true,
+        "fmnist_hflip_p": 0.0,
+        "device": "cuda:0"
+    },
+    "results": [
+        {
+            "epoch": 1,
+            "train_acc": 93.15666666666667,
+            "test_acc": 93.48,
+            "avg_neg_activity_ratio": 0.5010530455371044,
+            "avg_flops_sparse_G": 0.16089670672340425,
+            "avg_dm_sparse_MB": 426.4132862821538,
+            "avg_bits_sparse_Gb": 0.015276973434042553
+        },
+        {
+            "epoch": 2,
+            "train_acc": 95.295,
+            "test_acc": 95.1,
+            "avg_neg_activity_ratio": 0.5150348258303059,
+            "avg_flops_sparse_G": 0.16056996995744682,
+            "avg_dm_sparse_MB": 425.8019454793727,
+            "avg_bits_sparse_Gb": 0.015383183280851065
+        },
+        {
+            "epoch": 3,
+            "train_acc": 96.23833333333333,
+            "test_acc": 95.85,
+            "avg_neg_activity_ratio": 0.521465657974399,
+            "avg_flops_sparse_G": 0.16051551846808512,
+            "avg_dm_sparse_MB": 425.7126785115993,
+            "avg_bits_sparse_Gb": 0.0155342325106383
+        },
+        {
+            "epoch": 4,
+            "train_acc": 96.87166666666667,
+            "test_acc": 96.34,
+            "avg_neg_activity_ratio": 0.5201771833376577,
+            "avg_flops_sparse_G": 0.16056151863829787,
+            "avg_dm_sparse_MB": 425.82349192842526,
+            "avg_bits_sparse_Gb": 0.01577935784255319
+        },
+        {
+            "epoch": 5,
+            "train_acc": 97.22,
+            "test_acc": 96.63,
+            "avg_neg_activity_ratio": 0.5192128308251168,
+            "avg_flops_sparse_G": 0.1605949990638298,
+            "avg_dm_sparse_MB": 425.90407607707573,
+            "avg_bits_sparse_Gb": 0.015957230987234044
+        },
+        {
+            "epoch": 6,
+            "train_acc": 97.51833333333333,
+            "test_acc": 96.86,
+            "avg_neg_activity_ratio": 0.5174708365767168,
+            "avg_flops_sparse_G": 0.1606378930212766,
+            "avg_dm_sparse_MB": 426.001742813435,
+            "avg_bits_sparse_Gb": 0.016126175578723406
+        },
+        {
+            "epoch": 7,
+            "train_acc": 97.75333333333333,
+            "test_acc": 97.06,
+            "avg_neg_activity_ratio": 0.5161360626405465,
+            "avg_flops_sparse_G": 0.16067310144680852,
+            "avg_dm_sparse_MB": 426.08212423121677,
+            "avg_bits_sparse_Gb": 0.01626732689787234
+        },
+        {
+            "epoch": 8,
+            "train_acc": 97.945,
+            "test_acc": 97.22,
+            "avg_neg_activity_ratio": 0.5150655028325545,
+            "avg_flops_sparse_G": 0.16070397727659574,
+            "avg_dm_sparse_MB": 426.15276849624956,
+            "avg_bits_sparse_Gb": 0.01639263195319149
+        },
+        {
+            "epoch": 9,
+            "train_acc": 98.06666666666666,
+            "test_acc": 97.3,
+            "avg_neg_activity_ratio": 0.5139682932234906,
+            "avg_flops_sparse_G": 0.16073650672340425,
+            "avg_dm_sparse_MB": 426.22535837051714,
+            "avg_bits_sparse_Gb": 0.016505260821276596
+        },
+        {
+            "epoch": 10,
+            "train_acc": 98.17833333333333,
+            "test_acc": 97.43,
+            "avg_neg_activity_ratio": 0.5138378551504929,
+            "avg_flops_sparse_G": 0.16075745931914892,
+            "avg_dm_sparse_MB": 426.27314498576715,
+            "avg_bits_sparse_Gb": 0.016588627068085105
+        },
+        {
+            "epoch": 11,
+            "train_acc": 98.265,
+            "test_acc": 97.44,
+            "avg_neg_activity_ratio": 0.5135308553883409,
+            "avg_flops_sparse_G": 0.160776468,
+            "avg_dm_sparse_MB": 426.3166321612419,
+            "avg_bits_sparse_Gb": 0.016665882727659575
+        },
+        {
+            "epoch": 12,
+            "train_acc": 98.41666666666667,
+            "test_acc": 97.61,
+            "avg_neg_activity_ratio": 0.5128456635962635,
+            "avg_flops_sparse_G": 0.16080379106382978,
+            "avg_dm_sparse_MB": 426.37658170334834,
+            "avg_bits_sparse_Gb": 0.016749829923404257
+        },
+        {
+            "epoch": 13,
+            "train_acc": 98.45166666666667,
+            "test_acc": 97.64,
+            "avg_neg_activity_ratio": 0.5123643454852101,
+            "avg_flops_sparse_G": 0.16082051182978724,
+            "avg_dm_sparse_MB": 426.4144342463067,
+            "avg_bits_sparse_Gb": 0.016813463851063828
+        },
+        {
+            "epoch": 14,
+            "train_acc": 98.525,
+            "test_acc": 97.57,
+            "avg_neg_activity_ratio": 0.5119041363950877,
+            "avg_flops_sparse_G": 0.16083793123404255,
+            "avg_dm_sparse_MB": 426.45342908818674,
+            "avg_bits_sparse_Gb": 0.0168751379106383
+        },
+        {
+            "epoch": 15,
+            "train_acc": 98.60833333333333,
+            "test_acc": 97.66,
+            "avg_neg_activity_ratio": 0.5118617156417575,
+            "avg_flops_sparse_G": 0.16085102161702125,
+            "avg_dm_sparse_MB": 426.483360907372,
+            "avg_bits_sparse_Gb": 0.016928179829787237
+        },
+        {
+            "epoch": 16,
+            "train_acc": 98.69166666666666,
+            "test_acc": 97.76,
+            "avg_neg_activity_ratio": 0.510974839452517,
+            "avg_flops_sparse_G": 0.16087468876595745,
+            "avg_dm_sparse_MB": 426.53503924430686,
+            "avg_bits_sparse_Gb": 0.01699831565531915
+        },
+        {
+            "epoch": 17,
+            "train_acc": 98.755,
+            "test_acc": 97.76,
+            "avg_neg_activity_ratio": 0.5109110664244939,
+            "avg_flops_sparse_G": 0.1608857944680851,
+            "avg_dm_sparse_MB": 426.56031323696703,
+            "avg_bits_sparse_Gb": 0.01704221428085106
+        },
+        {
+            "epoch": 18,
+            "train_acc": 98.81166666666667,
+            "test_acc": 97.82,
+            "avg_neg_activity_ratio": 0.511373870221415,
+            "avg_flops_sparse_G": 0.16089324604255317,
+            "avg_dm_sparse_MB": 426.5776578375634,
+            "avg_bits_sparse_Gb": 0.01707570313617021
+        },
+        {
+            "epoch": 19,
+            "train_acc": 98.845,
+            "test_acc": 97.84,
+            "avg_neg_activity_ratio": 0.5107677359020928,
+            "avg_flops_sparse_G": 0.16091226110638296,
+            "avg_dm_sparse_MB": 426.6189280733149,
+            "avg_bits_sparse_Gb": 0.01712950110212766
+        },
+        {
+            "epoch": 20,
+            "train_acc": 98.91333333333333,
+            "test_acc": 97.96,
+            "avg_neg_activity_ratio": 0.5108131567851586,
+            "avg_flops_sparse_G": 0.16092031336170212,
+            "avg_dm_sparse_MB": 426.637803276549,
+            "avg_bits_sparse_Gb": 0.017167043323404255
+        }
+    ]
+}

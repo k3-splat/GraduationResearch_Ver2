@@ -1,0 +1,26 @@
+
+============================================================
+PHASE 2: Final Training (Epochs: 20)
+============================================================
+Epoch 01 | Acc: 89.82% | Sparse(L1): 0.015 | MeanAct(L1): 0.430
+Epoch 02 | Acc: 92.48% | Sparse(L1): 0.010 | MeanAct(L1): 0.609
+Epoch 03 | Acc: 93.96% | Sparse(L1): 0.007 | MeanAct(L1): 0.756
+Epoch 04 | Acc: 94.62% | Sparse(L1): 0.006 | MeanAct(L1): 0.858
+Epoch 05 | Acc: 95.14% | Sparse(L1): 0.005 | MeanAct(L1): 0.931
+Epoch 06 | Acc: 95.40% | Sparse(L1): 0.004 | MeanAct(L1): 0.974
+Epoch 07 | Acc: 95.48% | Sparse(L1): 0.004 | MeanAct(L1): 1.013
+Epoch 08 | Acc: 95.72% | Sparse(L1): 0.003 | MeanAct(L1): 1.032
+Epoch 09 | Acc: 95.80% | Sparse(L1): 0.003 | MeanAct(L1): 1.058
+Epoch 10 | Acc: 96.12% | Sparse(L1): 0.003 | MeanAct(L1): 1.079
+Epoch 11 | Acc: 96.22% | Sparse(L1): 0.003 | MeanAct(L1): 1.107
+Epoch 12 | Acc: 96.24% | Sparse(L1): 0.002 | MeanAct(L1): 1.133
+Epoch 13 | Acc: 96.36% | Sparse(L1): 0.002 | MeanAct(L1): 1.140
+Epoch 14 | Acc: 96.42% | Sparse(L1): 0.002 | MeanAct(L1): 1.137
+Epoch 15 | Acc: 96.44% | Sparse(L1): 0.002 | MeanAct(L1): 1.165
+Epoch 16 | Acc: 96.46% | Sparse(L1): 0.002 | MeanAct(L1): 1.163
+Epoch 17 | Acc: 96.62% | Sparse(L1): 0.002 | MeanAct(L1): 1.186
+Epoch 18 | Acc: 96.66% | Sparse(L1): 0.002 | MeanAct(L1): 1.193
+Epoch 19 | Acc: 96.66% | Sparse(L1): 0.001 | MeanAct(L1): 1.212
+Epoch 20 | Acc: 96.86% | Sparse(L1): 0.002 | MeanAct(L1): 1.209
+Computing Final RMSE and generating images...
+Results saved in: logs/bPC_20260204_185757
