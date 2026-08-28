@@ -73,10 +73,23 @@ COMMON_CONFIG = {
     'batch_size': 256,
     'hidden_size': 400,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'run_search': False,  # False にすれば探索なしモード
-    'search_trials': 20, 
-    'search_epochs': 25, 
-    'final_epochs': 20,    
+<<<<<<< HEAD
+    
+    # -----------------------------------------------------------
+    # [制御フラグ] 
+    # True : Optunaによる探索を実行 (Table 5の設定を使用)
+    # False: 探索をスキップし、下記 'fixed_params' で学習・生成のみ実行
+    # -----------------------------------------------------------
+    'run_search': False,  # ★ここを False にすれば探索なしモードになります
+
+    # 探索設定 (Table 5準拠)
+    'search_trials': 20,    # 探索回数 (必要に応じて増やしてください)
+    'search_epochs': 25,    # 論文 Table 5 では Epoch 25
+    
+    # 本番学習設定
+    'final_epochs': 40,    
+    
+    # 固定パラメータ (探索スキップ時に使用するデフォルト設定)
     'fixed_params': {
         'activation': 'leaky_relu',
         'lr_activities': 0.0034549692255545815,
@@ -314,7 +327,7 @@ def search_hyperparameters(train_loader, val_loader):
         for epoch in range(COMMON_CONFIG['search_epochs']):
             model.train()
             for i, (images, labels) in enumerate(train_loader):
-                if i > 50: break 
+                # if i > 50: break 
                 images, labels = images.to(device), labels.to(device)
                 activities = model.forward_init(images)
                 with torch.no_grad():
@@ -336,6 +349,19 @@ def search_hyperparameters(train_loader, val_loader):
 
     study = optuna.create_study(direction='minimize')
     study.optimize(objective, n_trials=COMMON_CONFIG['search_trials'])
+<<<<<<< HEAD
+    
+    # ★探索結果のCSV保存
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    search_csv_path = f"GraduationResearch_Ver2/Code/Compare_model/logs/optuna_search_results_{timestamp}.csv"
+    study.trials_dataframe().to_csv(search_csv_path, index=False)
+    print(f"\nAll hyperparameter search results saved to: {search_csv_path}")
+    
+    print(f"Best Loss: {study.best_value:.4f}")
+    print(f"Best Params: {study.best_params}")
+    
+=======
+>>>>>>> 5abfe0d8a4a72f7e2f6bc54d0febfae03b07229a
     best_params = study.best_params
     best_params.update({'T_train': 8, 'T_eval': 100, 'alpha_disc': 1.0})
     return best_params
@@ -483,11 +509,18 @@ def generate_images_from_labels(model, device, params, class_averages, save_path
 # =============================================================================
 if __name__ == "__main__":
     if not os.path.exists('logs'): os.makedirs('logs')
+<<<<<<< HEAD
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/bPC_log_{timestamp}.txt"
+    csv_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/bPC_metrics_{timestamp}.csv"
+    gen_img_file = f"GraduationResearch_Ver2/Code/Compare_model/logs/generated_digits_{timestamp}.png"
+=======
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = f"logs/bPC_log_{ts}.txt"
     csv_file = f"logs/bPC_metrics_{ts}.csv"
     err_fig = f"logs/error_trends_{ts}.png"
     gen_img = f"logs/generated_digits_{ts}.png"
+>>>>>>> 5abfe0d8a4a72f7e2f6bc54d0febfae03b07229a
     
     sys.stdout = DualLogger(log_file)
     train_loader, val_loader, test_loader = get_dataloaders(COMMON_CONFIG['batch_size'])
@@ -498,5 +531,14 @@ if __name__ == "__main__":
     
     print("Computing Final RMSE and generating images...")
     test_class_avgs = compute_class_averages(test_loader, device)
+<<<<<<< HEAD
+    
+    generate_images_from_labels(
+        trained_model, device, best_params,
+        class_averages=test_class_avgs,
+        save_path=gen_img_file
+    )
+=======
     generate_images_from_labels(trained_model, device, best_params, test_class_avgs, gen_img)
     print(f"Results saved: {err_fig}, {gen_img}")
+>>>>>>> 5abfe0d8a4a72f7e2f6bc54d0febfae03b07229a

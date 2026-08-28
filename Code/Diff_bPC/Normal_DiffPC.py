@@ -819,7 +819,7 @@ def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        layer_dims=[784, 400, 10],
+        layer_dims=[784, 400, 400, 10],
         lt_m=0,
         lt_n=5,
         lt_a=1.0,

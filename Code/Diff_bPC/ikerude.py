@@ -496,6 +496,80 @@ def infer_batch_forward_only(net: DiffPCNetworkTorch, x: torch.Tensor, cfg: Diff
             
     return net.layers[-1].x_T.clone(), spike_stats
 
+@torch.no_grad()
+def run_generation_experiment(net: DiffPCNetworkTorch, cfg: DiffPCConfig, 
+                              l_t_spec: dict, y_spec: dict, epoch: int, log_dir: str):
+    """
+    学習済みモデルのラベル層を固定し、データ層をフリーにして画像を生成する実験
+    """
+    print(f"\n--- Running Generation Experiment (Epoch {epoch}) ---")
+    
+    # 0~9の数字を生成対象とする
+    digits = torch.arange(10, device=net.device)
+    y_onehot = F.one_hot(digits, num_classes=cfg.layer_dims[-1]).float()
+    
+    # スケジュール設定（学習時のPhase2と同様の設定を用いる）
+    lt_n = l_t_spec["args"]["n"]
+    custom_gen_cycles = 500
+    steps = custom_gen_cycles * lt_n
+    
+    net.set_sampling_duration(steps)
+    net.reset_all_states(batch_size=10) # 0-9の10枚分
+    net._bias_fired_once = False
+    for lyr in [net.input_driver, *net.layers]: lyr.ff_init_duration = steps
+
+    # スケジューラの初期化
+    l_t_sched = get_l_t_scheduler(l_t_spec["type"], l_t_spec["args"])
+    # 生成には更新が必要なので、Phase2用のy_scheduler（gamma > 0）を使用
+    y_gen = get_y_scheduler(y_spec["type"], {**y_spec["args"], "l_t_scheduler": l_t_sched})
+    
+    l_t_sched.begin_phase(phase_start_step=0, phase_len=steps, a=cfg.lt_a)
+    net.swap_schedulers(l_t_sched, y_gen)
+
+    # 推論モード（Dropoutなし）
+    net.set_training(False)
+
+    # === 重要: クランプの設定 ===
+    # Layer 0 (データ層): クランプを外す (生成されたイメージが現れる場所)
+    net.set_clamp(0, False) 
+    
+    # 中間層: クランプなし (デフォルト)
+    for li in range(1, len(net.layers)):
+        net.set_clamp(li, False)
+        
+    # 最上位層 (ラベル層): クランプする (生成したい数字を指定)
+    net.set_clamp(len(net.layers), True, y_onehot)
+
+    # === 生成ループ ===
+    # 初期状態は reset_all_states でゼロになっています。
+    # トップダウンの予測誤差によって input_driver.x_T が徐々に画像へ変化します。
+    for _ in range(steps):
+        net.one_time_step()
+
+    # === 結果の取得と保存 ===
+    # input_driver (データ層) のニューロン活動 x_T を取得
+    generated_data = net.input_driver.x_T.detach().cpu()
+    
+    # 画像形状にリシェイプ (MNIST/FashionMNIST: 28x28)
+    img_size = int(math.sqrt(net.cfg.layer_dims[0])) 
+    generated_imgs = generated_data.view(10, img_size, img_size)
+
+    # プロット
+    fig, axes = plt.subplots(1, 10, figsize=(15, 2))
+    for i in range(10):
+        ax = axes[i]
+        # 0番目の次元を取り出して表示
+        ax.imshow(generated_imgs[i], cmap='gray')
+        ax.axis('off')
+        ax.set_title(f"{digits[i].item()}")
+    
+    save_path = os.path.join(log_dir, f"{cfg.run_name}_epoch{epoch:02d}_generated.png")
+    plt.suptitle(f"Generated Digits (Epoch {epoch})", fontsize=14)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"Generated images saved to {save_path}")
+
 
 # =========================
 #  MNIST training wrapper
@@ -689,7 +763,7 @@ def debug_lt(cfg: DiffPCConfig, seq_len: Optional[int] = None):
 
 if __name__ == "__main__":
     cfg = DiffPCConfig(
-        layer_dims=[784, 400, 10],
+        layer_dims=[784, 400, 400, 10],
         lt_m=0,
         lt_n=5,
         lt_a=1.0,

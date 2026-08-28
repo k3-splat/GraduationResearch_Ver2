@@ -1,0 +1,33 @@
+DO Python file
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Epoch 01: train acc 77.81% | test acc 86.55% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 02: train acc 82.95% | test acc 89.78% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 03: train acc 85.91% | test acc 91.85% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 04: train acc 87.89% | test acc 92.86% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 05: train acc 88.91% | test acc 93.53% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 06: train acc 89.89% | test acc 94.22% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 07: train acc 90.70% | test acc 94.46% | Avg Spikes/N (Train P2): s_a=0.05, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 08: train acc 91.02% | test acc 94.44% | Avg Spikes/N (Train P2): s_a=0.05, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 09: train acc 91.74% | test acc 95.30% | Avg Spikes/N (Train P2): s_a=0.05, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 10: train acc 92.17% | test acc 95.41% | Avg Spikes/N (Train P2): s_a=0.05, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 11: train acc 91.99% | test acc 95.08% | Avg Spikes/N (Train P2): s_a=0.06, s_e_disc=0.03 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 12: train acc 92.42% | test acc 95.27% | Avg Spikes/N (Train P2): s_a=0.06, s_e_disc=0.03 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 13: train acc 92.64% | test acc 95.86% | Avg Spikes/N (Train P2): s_a=0.06, s_e_disc=0.03 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 14: train acc 92.88% | test acc 95.57% | Avg Spikes/N (Train P2): s_a=0.07, s_e_disc=0.03 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 15: train acc 92.80% | test acc 95.58% | Avg Spikes/N (Train P2): s_a=0.07, s_e_disc=0.03 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 16: train acc 93.00% | test acc 95.43% | Avg Spikes/N (Train P2): s_a=0.07, s_e_disc=0.04 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 17: train acc 92.75% | test acc 95.32% | Avg Spikes/N (Train P2): s_a=0.08, s_e_disc=0.04 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 18: train acc 92.58% | test acc 95.14% | Avg Spikes/N (Train P2): s_a=0.08, s_e_disc=0.04 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 19: train acc 92.98% | test acc 95.68% | Avg Spikes/N (Train P2): s_a=0.08, s_e_disc=0.04 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 20: train acc 93.11% | test acc 95.50% | Avg Spikes/N (Train P2): s_a=0.08, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 21: train acc 93.05% | test acc 95.44% | Avg Spikes/N (Train P2): s_a=0.08, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 22: train acc 92.86% | test acc 95.28% | Avg Spikes/N (Train P2): s_a=0.09, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 23: train acc 93.05% | test acc 95.73% | Avg Spikes/N (Train P2): s_a=0.09, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 24: train acc 92.48% | test acc 95.24% | Avg Spikes/N (Train P2): s_a=0.09, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 25: train acc 93.28% | test acc 95.73% | Avg Spikes/N (Train P2): s_a=0.09, s_e_disc=0.05 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Generating digits for epoch 25...
+Generated images saved to: runs/generated_images/epoch_025_generated.png
+
+Run complete. Results saved to runs/mnist_400h.json

@@ -1,0 +1,35 @@
+DO Python file
+[I 2026-01-17 23:26:55,487] A new study created in memory with name: no-name-ce14e46f-e622-4e8e-bfb8-c9e4eb47c4ea
+[I 2026-01-18 00:28:04,156] Trial 0 finished with value: 9.805689102564102 and parameters: {'alpha_u': 0.00021607686029397557, 'weight_decay': 0.0002703371856911311, 'beta': 0.5971486348050415}. Best is trial 0 with value: 9.805689102564102.
+[I 2026-01-18 01:10:19,658] Trial 1 finished with value: 10.336538461538462 and parameters: {'alpha_u': 0.0005305687152193338, 'weight_decay': 0.000895557793366109, 'beta': 2.8494073972028637}. Best is trial 1 with value: 10.336538461538462.
+[I 2026-01-18 01:52:17,357] Trial 2 finished with value: 9.85576923076923 and parameters: {'alpha_u': 0.000491970700365657, 'weight_decay': 0.001506052551199491, 'beta': 2.5055122062713777}. Best is trial 1 with value: 10.336538461538462.
+[I 2026-01-18 02:34:20,179] Trial 3 finished with value: 39.24278846153846 and parameters: {'alpha_u': 0.00017221188825161868, 'weight_decay': 0.001523732412340279, 'beta': 2.6953168463812434}. Best is trial 3 with value: 39.24278846153846.
+[I 2026-01-18 03:16:18,573] Trial 4 finished with value: 9.825721153846153 and parameters: {'alpha_u': 0.010813469632287818, 'weight_decay': 4.950484398870578e-05, 'beta': 2.453768639935618}. Best is trial 3 with value: 39.24278846153846.
+[I 2026-01-18 03:24:40,537] Trial 5 pruned. 
+[I 2026-01-18 03:32:58,673] Trial 6 pruned. 
+[I 2026-01-18 03:41:20,657] Trial 7 pruned. 
+[I 2026-01-18 03:49:40,846] Trial 8 pruned. 
+[I 2026-01-18 03:58:01,012] Trial 9 pruned. 
+[I 2026-01-18 04:06:23,973] Trial 10 pruned. 
+[I 2026-01-18 04:14:45,427] Trial 11 pruned. 
+[I 2026-01-18 04:23:07,847] Trial 12 pruned. 
+[I 2026-01-18 04:31:29,386] Trial 13 pruned. 
+[I 2026-01-18 05:13:20,318] Trial 14 finished with value: 18.719951923076923 and parameters: {'alpha_u': 0.00011123039466966781, 'weight_decay': 0.002861718246172308, 'beta': 1.9637783168559273}. Best is trial 3 with value: 39.24278846153846.
+[I 2026-01-18 05:21:41,267] Trial 15 pruned. 
+[I 2026-01-18 05:30:03,682] Trial 16 pruned. 
+[I 2026-01-18 05:38:23,428] Trial 17 pruned. 
+[I 2026-01-18 05:46:41,556] Trial 18 pruned. 
+[I 2026-01-18 05:55:01,474] Trial 19 pruned. 
+=== SpNCN Hyperparameter Optimization with Optuna (AdamW) ===
+Starting optimization...
+
+==================================================
+Optimization Finished.
+Best Trial:
+  Value (Acc): 39.24%
+  Params: 
+    alpha_u: 0.00017221188825161868
+    weight_decay: 0.001523732412340279
+    beta: 2.6953168463812434
+==================================================
+Results saved to ./results/SpNCN_Optimization/optuna_results.csv

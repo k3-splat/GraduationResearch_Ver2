@@ -389,6 +389,7 @@ def run_experiment(dataset_name='MNIST'):
     
     # モデル構築
     layer_sizes = [784, 500, 500, 10]
+    
     model = bPC_SNN(layer_sizes=layer_sizes, config=CONFIG).to(CONFIG['device'])
     
     steps = int(CONFIG['T_st'] / CONFIG['dt'])
@@ -439,7 +440,7 @@ def run_experiment(dataset_name='MNIST'):
                 imgs, lbls = imgs.to(CONFIG['device']), lbls.to(CONFIG['device'])
                 imgs_rate = torch.clamp(imgs, 0, 1)
                 spike_in = spikegen.rate(imgs_rate, steps)
-                # spike_in = generate_poisson_spikes(imgs_rate, steps, CONFIG)
+                # spike_in = generate_poisson_spikes(imgs_rate,steps,CONFIG)
                 
                 model.reset_state(imgs.size(0), CONFIG['device'])
                 sum_out_spikes = 0

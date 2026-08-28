@@ -1,0 +1,18 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Epoch 01: train acc 85.13% | test acc 90.68% | Avg Spikes/N (Train P2): s_a=0.04, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 02: train acc 90.02% | test acc 93.55% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 03: train acc 92.06% | test acc 95.03% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 04: train acc 93.13% | test acc 95.59% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 05: train acc 93.86% | test acc 96.11% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 06: train acc 94.29% | test acc 96.12% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 07: train acc 94.74% | test acc 96.40% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 08: train acc 94.93% | test acc 96.57% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 09: train acc 95.22% | test acc 96.83% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+Epoch 10: train acc 95.32% | test acc 96.86% | Avg Spikes/N (Train P2): s_a=0.03, s_e_disc=0.02 , s_e_gen=0.00| Avg Spikes/N (Test P1):  s_a=0.00, s_e_disc=0.00, s_e_gen=0.00
+
+Run complete. Results saved to runs/mnist_400h.json

@@ -1,0 +1,134 @@
+DO Python file
+
+=== Running bPC-SNN on MNIST ===
+Results will be saved to: ./results/bPC_SNN/log_spikeend2end_MNIST_20260122_192109.csv
+Epoch 0 | Batch 0
+Epoch 0 | Batch 100
+Epoch 0 | Batch 200
+Epoch 0 | Batch 300
+Epoch 0 | Batch 400
+Epoch 0 | Batch 500
+Epoch 0 | Batch 600
+Epoch 0 | Batch 700
+Epoch 0 | Batch 800
+Epoch 0 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 0 DONE | Test Acc: 74.76% | Time: 884.5s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 1 | Batch 0
+Epoch 1 | Batch 100
+Epoch 1 | Batch 200
+Epoch 1 | Batch 300
+Epoch 1 | Batch 400
+Epoch 1 | Batch 500
+Epoch 1 | Batch 600
+Epoch 1 | Batch 700
+Epoch 1 | Batch 800
+Epoch 1 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 1 DONE | Test Acc: 75.28% | Time: 884.0s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 2 | Batch 0
+Epoch 2 | Batch 100
+Epoch 2 | Batch 200
+Epoch 2 | Batch 300
+Epoch 2 | Batch 400
+Epoch 2 | Batch 500
+Epoch 2 | Batch 600
+Epoch 2 | Batch 700
+Epoch 2 | Batch 800
+Epoch 2 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 2 DONE | Test Acc: 75.17% | Time: 883.9s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 3 | Batch 0
+Epoch 3 | Batch 100
+Epoch 3 | Batch 200
+Epoch 3 | Batch 300
+Epoch 3 | Batch 400
+Epoch 3 | Batch 500
+Epoch 3 | Batch 600
+Epoch 3 | Batch 700
+Epoch 3 | Batch 800
+Epoch 3 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 3 DONE | Test Acc: 78.92% | Time: 883.9s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 4 | Batch 0
+Epoch 4 | Batch 100
+Epoch 4 | Batch 200
+Epoch 4 | Batch 300
+Epoch 4 | Batch 400
+Epoch 4 | Batch 500
+Epoch 4 | Batch 600
+Epoch 4 | Batch 700
+Epoch 4 | Batch 800
+Epoch 4 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 4 DONE | Test Acc: 78.54% | Time: 883.7s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 5 | Batch 0
+Epoch 5 | Batch 100
+Epoch 5 | Batch 200
+Epoch 5 | Batch 300
+Epoch 5 | Batch 400
+Epoch 5 | Batch 500
+Epoch 5 | Batch 600
+Epoch 5 | Batch 700
+Epoch 5 | Batch 800
+Epoch 5 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 5 DONE | Test Acc: 76.73% | Time: 883.9s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 6 | Batch 0
+Epoch 6 | Batch 100
+Epoch 6 | Batch 200
+Epoch 6 | Batch 300
+Epoch 6 | Batch 400
+Epoch 6 | Batch 500
+Epoch 6 | Batch 600
+Epoch 6 | Batch 700
+Epoch 6 | Batch 800
+Epoch 6 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 6 DONE | Test Acc: 75.41% | Time: 883.8s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 7 | Batch 0
+Epoch 7 | Batch 100
+Epoch 7 | Batch 200
+Epoch 7 | Batch 300
+Epoch 7 | Batch 400
+Epoch 7 | Batch 500
+Epoch 7 | Batch 600
+Epoch 7 | Batch 700
+Epoch 7 | Batch 800
+Epoch 7 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 7 DONE | Test Acc: 77.09% | Time: 883.9s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 8 | Batch 0
+Epoch 8 | Batch 100
+Epoch 8 | Batch 200
+Epoch 8 | Batch 300
+Epoch 8 | Batch 400
+Epoch 8 | Batch 500
+Epoch 8 | Batch 600
+Epoch 8 | Batch 700
+Epoch 8 | Batch 800
+Epoch 8 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 8 DONE | Test Acc: 78.34% | Time: 883.9s
+Switching label layer back to Training Mode (Clamp)...
+Epoch 9 | Batch 0
+Epoch 9 | Batch 100
+Epoch 9 | Batch 200
+Epoch 9 | Batch 300
+Epoch 9 | Batch 400
+Epoch 9 | Batch 500
+Epoch 9 | Batch 600
+Epoch 9 | Batch 700
+Epoch 9 | Batch 800
+Epoch 9 | Batch 900
+Switching label layer to Inference Mode (LIF)...
+Epoch 9 DONE | Test Acc: 80.16% | Time: 884.1s
+Switching label layer back to Training Mode (Clamp)...

@@ -21,8 +21,13 @@ CONFIG = {
     'alpha_u': 0.0005,   # 重み学習率
     'beta': 1.0,        # 誤差重み学習率
     'thresh': 0.4,       # 発火閾値
+<<<<<<< HEAD
+    'max_freq' : 63.75, # 最大周波数
+    'batch_size': 1,
+=======
     'max_freq' : 382.5, # 最大周波数
     'batch_size': 64,
+>>>>>>> 37cfe569dd39dcf640f8dbd34537bf9e03edab14
     'target_acc': 95.0,  # 目標テスト精度 (%) (target_accモードで使用)
     'max_epochs': 10,   # 最大エポック数 (fixed_epochsモードではこの回数実行)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -311,7 +316,7 @@ def run_experiment(dataset_name='MNIST', mode='fixed_epochs'):
     
     # モデル構築
     model = SpNCN(
-        hidden_sizes=[500, 500], 
+        hidden_sizes=[3000, 3000, 3000], 
         input_size=784, 
         label_size=10, 
         config=CONFIG

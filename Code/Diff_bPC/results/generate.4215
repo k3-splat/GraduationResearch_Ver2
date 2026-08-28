@@ -1,0 +1,21 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Starting run: mnist_400h
+Using device: cuda:0
+Logging to: runs/mnist_400h.json
+Epoch 01: train acc 9.89% | test acc 9.89% | Avg Spikes/N (Train P2): s_a=11.11, s_e_disc=29.02 , s_e_gen=31.25| Avg Spikes/N (Test P1):  s_a=50.30, s_e_disc=0.00, s_e_gen=0.00
+Epoch 02: train acc 6.90% | test acc 7.21% | Avg Spikes/N (Train P2): s_a=11.85, s_e_disc=28.37 , s_e_gen=33.72| Avg Spikes/N (Test P1):  s_a=47.10, s_e_disc=0.00, s_e_gen=0.00
+Epoch 03: train acc 9.26% | test acc 9.26% | Avg Spikes/N (Train P2): s_a=11.31, s_e_disc=26.65 , s_e_gen=34.30| Avg Spikes/N (Test P1):  s_a=45.71, s_e_disc=0.00, s_e_gen=0.00
+Epoch 04: train acc 8.90% | test acc 9.20% | Avg Spikes/N (Train P2): s_a=10.86, s_e_disc=27.08 , s_e_gen=33.15| Avg Spikes/N (Test P1):  s_a=44.84, s_e_disc=0.00, s_e_gen=0.00
+Epoch 05: train acc 10.34% | test acc 10.38% | Avg Spikes/N (Train P2): s_a=11.24, s_e_disc=27.55 , s_e_gen=34.45| Avg Spikes/N (Test P1):  s_a=46.49, s_e_disc=0.00, s_e_gen=0.00
+Epoch 06: train acc 9.38% | test acc 9.97% | Avg Spikes/N (Train P2): s_a=11.48, s_e_disc=29.95 , s_e_gen=37.42| Avg Spikes/N (Test P1):  s_a=47.19, s_e_disc=0.00, s_e_gen=0.00
+Epoch 07: train acc 8.68% | test acc 8.43% | Avg Spikes/N (Train P2): s_a=14.30, s_e_disc=33.49 , s_e_gen=39.06| Avg Spikes/N (Test P1):  s_a=47.34, s_e_disc=0.00, s_e_gen=0.00
+Epoch 08: train acc 9.86% | test acc 9.76% | Avg Spikes/N (Train P2): s_a=15.14, s_e_disc=34.25 , s_e_gen=36.88| Avg Spikes/N (Test P1):  s_a=46.84, s_e_disc=0.00, s_e_gen=0.00
+Epoch 09: train acc 9.29% | test acc 9.20% | Avg Spikes/N (Train P2): s_a=16.86, s_e_disc=36.61 , s_e_gen=35.35| Avg Spikes/N (Test P1):  s_a=42.17, s_e_disc=0.00, s_e_gen=0.00
+Epoch 10: train acc 9.93% | test acc 10.32% | Avg Spikes/N (Train P2): s_a=14.79, s_e_disc=33.46 , s_e_gen=33.55| Avg Spikes/N (Test P1):  s_a=38.32, s_e_disc=0.00, s_e_gen=0.00
+
+--- Running Generation Experiment (Epoch 100) ---
+Generated images saved to runs/mnist_400h_epoch100_generated.png
+
+Run complete. Results saved to runs/mnist_400h.json

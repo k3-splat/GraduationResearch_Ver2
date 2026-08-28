@@ -1,0 +1,54 @@
+Waiting for GPU reservation activation...
+Assigned GPU devices: 1:0
+DO Python file
+Starting bPC Experiment.
+
+============================================================
+PHASE 1: Hyperparameter Search (Optuna - Table 5)
+Objective: Minimize [(1 - Accuracy) + RMSE]
+============================================================
+Computing validation class averages for RMSE optimization...
+
+All hyperparameter search results saved to: logs/optuna_search_results_20260129_120501.csv
+Best Loss: 0.2856
+Best Params: {'activation': 'tanh', 'lr_activities': 0.015544826047896726, 'momentum': 0.0, 'lr_weights': 9.904733889368756e-05, 'weight_decay': 0.00043310054707160455, 'alpha_gen': 0.1}
+
+============================================================
+PHASE 2: Final Training (Fixed Epochs: 25)
+Using Params: {'activation': 'tanh', 'lr_activities': 0.015544826047896726, 'momentum': 0.0, 'lr_weights': 9.904733889368756e-05, 'weight_decay': 0.00043310054707160455, 'alpha_gen': 0.1, 'T_train': 8, 'T_eval': 100, 'alpha_disc': 1.0}
+============================================================
+1      | 81.58      | 2005.92    | 35.82     
+2      | 85.46      | 4011.84    | 71.65     
+3      | 87.04      | 6017.76    | 107.47    
+4      | 87.34      | 8023.68    | 143.29    
+5      | 87.20      | 10029.60   | 179.11    
+6      | 87.46      | 12035.52   | 214.94    
+7      | 87.86      | 14041.44   | 250.76    
+8      | 87.70      | 16047.36   | 286.58    
+9      | 87.54      | 18053.28   | 322.40    
+10     | 88.36      | 20059.20   | 358.23    
+11     | 87.86      | 22065.12   | 394.05    
+12     | 88.08      | 24071.04   | 429.87    
+13     | 87.92      | 26076.96   | 465.69    
+14     | 88.02      | 28082.88   | 501.52    
+15     | 87.28      | 30088.80   | 537.34    
+16     | 87.82      | 32094.72   | 573.16    
+17     | 87.04      | 34100.64   | 608.98    
+18     | 87.06      | 36106.56   | 644.81    
+19     | 87.78      | 38112.48   | 680.63    
+20     | 87.24      | 40118.40   | 716.45    
+21     | 87.82      | 42124.32   | 752.28    
+22     | 87.28      | 44130.24   | 788.10    
+23     | 87.58      | 46136.16   | 823.92    
+24     | 87.94      | 48142.08   | 859.74    
+25     | 87.06      | 50148.00   | 895.57    
+
+=== Final Report ===
+Final Accuracy: 87.06%
+Computing Test Set class averages for final evaluation...
+
+============================================================
+PHASE 3: Generating Images & RMSE Calculation
+============================================================
+Total RMSE (Generated vs Class Average): 0.0907
+Generated images saved to: logs/generated_digits_20260129_114908.png
